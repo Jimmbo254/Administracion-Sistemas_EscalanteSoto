@@ -161,6 +161,15 @@ EOF"
 		;;
 		"5")
 		echo "=== Desinstalar Servicio ==="
+		if ! rpm -q dhcp-server &> /dev/null; then
+                echo -e "\e[31mError: El servicio no esta instalado.\e[0m"
+                read -p "Presione Enter..."
+                continue
+		else
+		sudo dnf remove -y dhcp-server
+		echo "SERVICIO DESINSTALADO CORRECTAMENTE"
+		read -p "Presione Enter..."
+        fi
 		read -p "Presione Enter..."
 		;;
 		"6") exit 0;;
