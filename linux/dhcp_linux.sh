@@ -153,10 +153,16 @@ EOF"
             ;;
 		"3")
 		echo "=== Monitorear ==="
+		echo -e "\e[33m\nLeases activos:\e[0m"
+            [ -f /var/lib/dhcpd/dhcpd.leases ] && sudo grep -E "lease|hostname|ends" /var/lib/dhcpd/dhcpd.leases || echo "Sin leases."
 		read -p "Presione Enter..."
 		;;
 		"4")
 		echo "=== Eliminar Leases ==="
+			sudo systemctl stop dhcpd
+            sudo sh -c "> /var/lib/dhcpd/dhcpd.leases"
+            sudo systemctl start dhcpd
+            echo -e "\e[32mLeases limpiados.\e[0m"
 		read -p "Presione Enter..."
 		;;
 		"5")
@@ -170,7 +176,6 @@ EOF"
 		echo "SERVICIO DESINSTALADO CORRECTAMENTE"
 		read -p "Presione Enter..."
         fi
-		read -p "Presione Enter..."
 		;;
 		"6") exit 0;;
 	esac
