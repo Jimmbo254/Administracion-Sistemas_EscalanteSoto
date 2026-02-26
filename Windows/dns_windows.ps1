@@ -1,0 +1,3 @@
+# dns_windows.ps1 - Servicio DNS
+
+#INICIALIZACION Y CREACION DE ARCHIVO
