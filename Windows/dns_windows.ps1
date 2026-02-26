@@ -7,11 +7,43 @@
 function Verificar-DNS {
     Write-Host ""
     Write-Host "=== Verificar instalacion DNS ==="
+    if (Rol-Instalado "DNS") {
+        Write-Host "[OK] DNS service esta instalado" -ForegroundColor Green
+        $svc = Get-Service -Name DNS -ErrorAction SilentlyContinue
+        if ($svc.Status -eq "Running") {
+            Write-Host "[OK] Servicio DNS RUNNING." -ForegroundColor Green
+        } else {
+            Write-Host "[Error] Servicio DNS no esta corriendo." -ForegroundColor Red
+        }
+    } else {
+        Write-Host "[Error] DNS service NO esta instalado" -ForegroundColor Red
+    }
+    Pause
 }
 
 function Instalar-DNS {
     Write-Host ""
     Write-Host "==== Instalando dependencias DNS ===="
+    Instalar-Rol "DNS"
+
+    Set-Service -Name DNS -StartupType Automatic -ErrorAction SilentlyContinue
+    Start-Service -Name DNS -ErrorAction SilentlyContinue
+
+    # Abrir puerto DNS en firewall
+    $regla = Get-NetFirewallRule -DisplayName "DNS" -ErrorAction SilentlyContinue
+    if (-not $regla) {
+        New-NetFirewallRule -DisplayName "DNS" -Direction Inbound -Protocol UDP -LocalPort 53 -Action Allow | Out-Null
+        New-NetFirewallRule -DisplayName "DNS" -Direction Inbound -Protocol TCP -LocalPort 53 -Action Allow | Out-Null
+        Write-Host "[OK] Puerto DNS abierto en firewall." -ForegroundColor Green
+    }
+
+    $svc = Get-Service -Name DNS -ErrorAction SilentlyContinue
+    if ($svc.Status -eq "Running") {
+        Write-Host "[OK] Servicio DNS RUNNING." -ForegroundColor Green
+    } else {
+        Write-Host "[ERROR] Servicio DNS no esta corriendo." -ForegroundColor Red
+    }
+    Pause
 }
 
 function Listar-Dominios {
