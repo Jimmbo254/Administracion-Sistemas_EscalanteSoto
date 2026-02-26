@@ -16,7 +16,7 @@ verificar_setup() {
     # evito que si se ejecuta instalar varias veces se duplique y BIND truene
     sed -i '/allow-query { any; };/d' "$NAMED_CONF"
     sed -i '/listen-on port 53 { any; };/d' "$NAMED_CONF"
-    sed -i '/listen-on-v6 port 53 { none; };/d' "$NAMED_CONF"
+    sed -i 's/listen-on-v6 port 53 { any; };//g' "$NAMED_CONF"
     sed -i 's/listen-on port 53 { 127.0.0.1; };//g' "$NAMED_CONF"
     sed -i 's/listen-on-v6 port 53 { ::1; };//g' "$NAMED_CONF"
     sed -i 's/allow-query     { localhost; };//g' "$NAMED_CONF"
