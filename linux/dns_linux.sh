@@ -49,12 +49,13 @@ verificar_setup() {
         echo -e "\e[31m[ERROR] named fallo al iniciar. Revisa: journalctl -xeu named\e[0m"
     fi
 
-    # Apuntar sistema a BIND local ignorando DNS automaticos
+    ip_servidor=$(ip -br addr show enp0s8 | awk '{print $3}' | cut -d'/' -f1)
     con_name=$(nmcli -t -f NAME con show --active | grep -v lo | head -1)
     nmcli con mod "$con_name" ipv4.ignore-auto-dns yes &>/dev/null
-    nmcli con mod "$con_name" ipv4.dns "127.0.0.1" &>/dev/null
+    nmcli con mod "$con_name" ipv4.dns "$ip_servidor" &>/dev/null
     nmcli con up "$con_name" &>/dev/null
-    echo "[OK] Sistema apuntando a DNS local."
+    echo "nameserver $ip_servidor" > /etc/resolv.conf
+    echo "[OK] Sistema apuntando a DNS local: $ip_servidor"
     read -p "Presione Enter..."
 }
 
