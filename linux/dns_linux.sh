@@ -11,6 +11,23 @@ ZONES_CONF="/etc/named.rfc1912.zones"
 
 verificar_setup() {
     echo "Verificando configuracion del servidor DNS..."
+
+    # CAMBIO: limpiar lineas duplicadas o defaults antes de inyectar
+    # evito que si se ejecuta instalar varias veces se duplique y BIND truene
+    sed -i '/allow-query { any; };/d' "$NAMED_CONF"
+    sed -i '/listen-on port 53 { any; };/d' "$NAMED_CONF"
+    sed -i '/listen-on-v6 port 53 { none; };/d' "$NAMED_CONF"
+    sed -i 's/listen-on port 53 { 127.0.0.1; };//g' "$NAMED_CONF"
+    sed -i 's/listen-on-v6 port 53 { ::1; };//g' "$NAMED_CONF"
+    sed -i 's/allow-query     { localhost; };//g' "$NAMED_CONF"
+
+    # CAMBIO: inyectar configuracion para que escuche en cualquier IP
+    sed -i '/^[[:space:]]*options[[:space:]]*{/a\
+    allow-query { any; };\
+    listen-on port 53 { any; };\
+    listen-on-v6 port 53 { none; };' "$NAMED_CONF"
+    # FIN CAMBIO
+    
     if named-checkconf "$NAMED_CONF"; then
         echo "[OK] named.conf valido"
     else
@@ -25,7 +42,13 @@ verificar_setup() {
     fi
 
     systemctl restart named
-    echo "[OK] Servicio named reiniciado"
+
+    if systemctl is-active --quiet named; then
+        echo -e "\e[32m[OK] Servicio named RUNNING.\e[0m"
+    else
+        echo -e "\e[31m[ERROR] named fallo al iniciar. Revisa: journalctl -xeu named\e[0m"
+    fi
+    
     read -p "Presione Enter..."
 }
 
@@ -116,6 +139,11 @@ ns IN A $ip_dominio
 www IN CNAME $dominio.
 EOF
 
+    # CAMBIO: permisos correctos para que SELinux no bloquee el archivo de zona
+    chown root:named "$zone_file"
+    restorecon -Rv "$zone_file" &>/dev/null
+    # FIN CAMBIO
+
     if grep -q "zone \"$dominio\"" "$ZONES_CONF" 2>/dev/null; then
         echo "[Aviso] El dominio '$dominio' ya existe."
     else
@@ -129,8 +157,14 @@ zone "$dominio" IN {
 EOF
     fi
 
-    systemctl restart named
-    echo "[OK] Dominio '$dominio' agregado."
+    # CAMBIO: verificar sintaxis antes de reiniciar para no romper el servicio
+    if named-checkconf "$NAMED_CONF"; then
+        systemctl restart named
+        echo -e "\n\e[32m[OK] Dominio '$dominio' agregado y apuntando a '$ip_dominio'.\e[0m"
+    else
+        echo -e "\n\e[31m[ERROR] Problema al configurar la zona. BIND no se reinicio.\e[0m"
+    fi
+    # FIN CAMBIO
     read -p "Presione Enter..."
 }
 
@@ -179,9 +213,7 @@ eliminar_dominio() {
     read -p "Presione Enter..."
 }
 
-# ============================================================
-# MAIN
-# ============================================================
+# MENU MAIN
 
 verificar_root
 
