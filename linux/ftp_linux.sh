@@ -9,12 +9,12 @@ NORMAL='\033[0m'
 ARCHIVO_LOG='/var/log/gestion_ftp.log'
 
 # Rutas Base
-RAIZ_FTP=
-RAIZ_USUARIOS=
-RAIZ_GRUPOS=
-CARPETA_GENERAL=
-CONF_VSFTPD=
-LISTA_USUARIOS=
+RAIZ_FTP="/srv/ftp"
+RAIZ_USUARIOS="$RAIZ_FTP/usuarios"
+RAIZ_GRUPOS="$RAIZ_FTP/grupos"
+CARPETA_GENERAL="$RAIZ_FTP/general"
+CONF_VSFTPD="/etc/vsftpd/vsftpd.conf"
+LISTA_USUARIOS="/etc/vsftpd/user_list"
 
 # ============== FUNCIONES ==============
 
