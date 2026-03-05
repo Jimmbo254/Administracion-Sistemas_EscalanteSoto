@@ -103,9 +103,13 @@ instalar_entorno() {
     done
 
     # Permitir /sbin/nologin como shell válido para usuarios FTP
-if ! grep -q "^/sbin/nologin$" /etc/shells; then
-    echo "/sbin/nologin" >> /etc/shells
-fi
+    if ! grep -q "^/sbin/nologin$" /etc/shells; then
+        echo "/sbin/nologin" >> /etc/shells
+        registrar "Shell /sbin/nologin agregado a /etc/shells." "OK"
+    fi
+
+    # Crear directorio requerido por vsftpd para chroot
+    mkdir -p /var/run/vsftpd/empty
 
     # Permisos en carpeta general: root la posee, todos pueden leer/ejecutar
     # Los usuarios autenticados tendrán ACL de escritura
@@ -163,8 +167,8 @@ userlist_deny=NO
 userlist_file=/etc/vsftpd/user_list
 
 # Directorio raíz por usuario (se resuelve dinámicamente)
-user_sub_token=$USER
-local_root=/srv/ftp/usuarios/$USER
+user_sub_token=%u
+local_root=/srv/ftp/usuarios/%u
 FINCONF
 
     # Crear lista de usuarios si no existe, agregar ftp (anónimo)
