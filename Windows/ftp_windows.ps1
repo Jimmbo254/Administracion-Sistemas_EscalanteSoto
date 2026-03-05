@@ -20,7 +20,6 @@ function Registrar {
     $fecha = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $linea = "[$fecha] [$Tipo] $Mensaje"
 
-    # Crear carpeta de log si no existe
     if (!(Test-Path "C:\logs")) { New-Item -ItemType Directory -Path "C:\logs" | Out-Null }
     Add-Content -Path $ARCHIVO_LOG -Value $linea
 
@@ -51,8 +50,6 @@ function Validar-Contrasena {
     return $true
 }
 
-# Asigna permisos NTFS a una carpeta para un usuario o grupo
-# Parametros: ruta, identidad (EQUIPO\usuario), tipo de acceso (FullControl, ReadAndExecute, etc), Allow/Deny
 function Asignar-Permiso {
     param(
         [string]$Ruta,
@@ -61,40 +58,29 @@ function Asignar-Permiso {
         [string]$Tipo = "Allow"
     )
     $acl = Get-Acl $Ruta
-    try {
-        $cuenta = New-Object System.Security.Principal.NTAccount($Identidad)
-        $sid = $cuenta.Translate([System.Security.Principal.SecurityIdentifier])
-        $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $sid, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
-        )
-    } catch {
-        $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $Identidad, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
-        )
-    }
+    $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $Identidad, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
+    )
     $acl.SetAccessRule($regla)
     Set-Acl -Path $Ruta -AclObject $acl
 }
 
 function Instalar-Entorno {
-    Registrar "Verificando instalación de IIS y FTP..." "INFO"
+    Registrar "Verificando instalacion de IIS y FTP..." "INFO"
 
-    # Instalar IIS con FTP si no están instalados
     $caracteristicas = @("Web-Server", "Web-Ftp-Server", "Web-Ftp-Service")
     foreach ($caracteristica in $caracteristicas) {
         $estado = Get-WindowsFeature -Name $caracteristica
         if (-not $estado.Installed) {
             Install-WindowsFeature -Name $caracteristica -IncludeManagementTools | Out-Null
-            Registrar "Característica '$caracteristica' instalada." "OK"
+            Registrar "Caracteristica '$caracteristica' instalada." "OK"
         } else {
-            Registrar "Característica '$caracteristica' ya estaba instalada." "INFO"
+            Registrar "Caracteristica '$caracteristica' ya estaba instalada." "INFO"
         }
     }
 
-    # Importar módulo WebAdministration para gestionar IIS
     Import-Module WebAdministration -ErrorAction SilentlyContinue
 
-    # Crear estructura de directorios
     $directorios = @(
         $CARPETA_GENERAL,
         "$CARPETA_ANONIMO\general",
@@ -109,7 +95,6 @@ function Instalar-Entorno {
         }
     }
 
-    # Crear grupos locales si no existen
     foreach ($grupo in @("reprobados", "recursadores")) {
         if (!(Get-LocalGroup -Name $grupo -ErrorAction SilentlyContinue)) {
             New-LocalGroup -Name $grupo -Description "Grupo FTP $grupo"
@@ -117,23 +102,19 @@ function Instalar-Entorno {
         }
     }
 
-    # Permisos carpeta general: todos los usuarios autenticados leen y escriben
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Users" -Permiso "ReadAndExecute"
-    Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "BUILTIN\\IIS_IUSRS" -Permiso "ReadAndExecute"
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Usuarios" -Permiso "ReadAndExecute"
+    Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "BUILTIN\IIS_IUSRS" -Permiso "ReadAndExecute"
 
-    # Copiar junction (enlace) de general en anonimo si no existe
     $junctionPath = "$CARPETA_ANONIMO\general"
     if (!(Test-Path $junctionPath)) {
         cmd /c "mklink /J `"$junctionPath`" `"$CARPETA_GENERAL`"" | Out-Null
         Registrar "Junction de general en anonimo creado." "OK"
     }
 
-    # Permisos carpetas de grupo
     foreach ($grupo in @("reprobados", "recursadores")) {
         Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo" -Identidad "$env:COMPUTERNAME\$grupo" -Permiso "Modify"
     }
 
-    # Crear o reconfigurar sitio FTP en IIS
     if (Get-WebSite -Name $SITIO_FTP -ErrorAction SilentlyContinue) {
         Remove-WebSite -Name $SITIO_FTP
         Registrar "Sitio FTP anterior eliminado para reconfigurar." "INFO"
@@ -142,11 +123,9 @@ function Instalar-Entorno {
     New-WebFtpSite -Name $SITIO_FTP -Port $PUERTO_FTP -PhysicalPath $RAIZ_FTP -Force | Out-Null
     Registrar "Sitio FTP '$SITIO_FTP' creado en puerto $PUERTO_FTP." "OK"
 
-    # Configurar acceso anónimo (solo lectura en /anonimo)
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
 
-    # Regla de autorización: anónimo solo lectura
     Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
         accessType  = "Allow"
         users       = ""
@@ -154,7 +133,6 @@ function Instalar-Entorno {
         permissions = "Read"
     } -PSPath "IIS:\" -Location "$SITIO_FTP"
 
-    # Regla de autorización: usuarios autenticados lectura y escritura
     Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
         accessType  = "Allow"
         users       = "*"
@@ -162,17 +140,14 @@ function Instalar-Entorno {
         permissions = "Read,Write"
     } -PSPath "IIS:\" -Location "$SITIO_FTP"
 
-    # Habilitar aislamiento de usuarios (chroot)
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.userIsolation.mode -Value "IsolateAllDirectories"
 
-    # Abrir puerto 21 en el firewall de Windows
     $reglaFirewall = Get-NetFirewallRule -DisplayName "FTP Puerto 21" -ErrorAction SilentlyContinue
     if (-not $reglaFirewall) {
         New-NetFirewallRule -DisplayName "FTP Puerto 21" -Direction Inbound -Protocol TCP -LocalPort 21 -Action Allow | Out-Null
         Registrar "Puerto 21 habilitado en firewall de Windows." "OK"
     }
 
-    # Iniciar sitio FTP (delay para que IIS registre el sitio correctamente)
     Start-Sleep -Seconds 2
     try {
         Start-WebSite -Name $SITIO_FTP -ErrorAction Stop
@@ -186,8 +161,6 @@ function Instalar-Entorno {
     Registrar "Entorno FTP listo y sitio activo." "OK"
 }
 
-# Crea el usuario local, lo agrega al grupo, crea su estructura
-# de directorios y asigna permisos NTFS correspondientes.
 function Crear-Usuario {
     param(
         [string]$Usuario,
@@ -195,14 +168,11 @@ function Crear-Usuario {
         [string]$Grupo
     )
 
-    # Crear usuario local del sistema
     $pass = ConvertTo-SecureString $Contrasena -AsPlainText -Force
     New-LocalUser -Name $Usuario -Password $pass -PasswordNeverExpires $true -UserMayNotChangePassword $false | Out-Null
     Add-LocalGroupMember -Group $Grupo -Member $Usuario
     Registrar "Usuario '$Usuario' creado y agregado al grupo '$Grupo'." "OK"
 
-    # Estructura de directorios del usuario
-    # IIS con aislamiento busca: \LocalUser\<usuario> como raíz del chroot
     $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$Usuario"
     $carpetas = @(
         "$raiz_chroot\$Usuario",
@@ -215,17 +185,14 @@ function Crear-Usuario {
         }
     }
 
-    # Permisos carpeta personal: solo el usuario
     Asignar-Permiso -Ruta "$raiz_chroot\$Usuario" -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
 
-    # Junction de general en chroot del usuario
     $junctionGeneral = "$raiz_chroot\general"
     if (!(Test-Path $junctionGeneral)) {
         cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
     }
     Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
 
-    # Junction de grupo en chroot del usuario
     $junctionGrupo = "$raiz_chroot\$Grupo"
     if (!(Test-Path $junctionGrupo)) {
         cmd /c "mklink /J `"$junctionGrupo`" `"$RAIZ_GRUPOS\$Grupo`"" | Out-Null
@@ -243,7 +210,7 @@ function Alta-Usuario {
     $usuario = $usuario.Trim()
 
     if ([string]::IsNullOrEmpty($usuario)) {
-        Registrar "El nombre de usuario no puede estar vacío." "ERROR"
+        Registrar "El nombre de usuario no puede estar vacio." "ERROR"
         return
     }
     if (Get-LocalUser -Name $usuario -ErrorAction SilentlyContinue) {
@@ -251,12 +218,12 @@ function Alta-Usuario {
         return
     }
 
-    $contrasena = Read-Host "Contraseña (8-15 chars, mayúscula, minúscula, número, especial)" -AsSecureString
+    $contrasena = Read-Host "Contrasena (8-15 chars, mayuscula, minuscula, numero, especial)" -AsSecureString
     $contrasenaPlana = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($contrasena)
     )
     if (!(Validar-Contrasena -Contrasena $contrasenaPlana)) {
-        Registrar "La contraseña no cumple los requisitos de seguridad." "ERROR"
+        Registrar "La contrasena no cumple los requisitos de seguridad." "ERROR"
         return
     }
 
@@ -269,7 +236,7 @@ function Alta-Usuario {
         "1" { $grupo = "reprobados" }
         "2" { $grupo = "recursadores" }
         default {
-            Registrar "Opción de grupo no válida." "ERROR"
+            Registrar "Opcion de grupo no valida." "ERROR"
             return
         }
     }
@@ -281,9 +248,9 @@ function Alta-Masiva {
     Write-Host ""
     Write-Host "-- Alta masiva de usuarios FTP --"
 
-    $cantidad = Read-Host "¿Cuántos usuarios deseas registrar?"
+    $cantidad = Read-Host "Cuantos usuarios deseas registrar?"
     if ($cantidad -notmatch '^\d+$' -or [int]$cantidad -le 0) {
-        Registrar "Cantidad inválida. Ingresa un número entero positivo." "ERROR"
+        Registrar "Cantidad invalida. Ingresa un numero entero positivo." "ERROR"
         return
     }
 
@@ -296,7 +263,7 @@ function Alta-Masiva {
 
         $usuario = (Read-Host "  Nombre de usuario").Trim()
         if ([string]::IsNullOrEmpty($usuario)) {
-            Registrar "Nombre vacío, se omite el usuario $i." "ERROR"
+            Registrar "Nombre vacio, se omite el usuario $i." "ERROR"
             $omitidos++
             continue
         }
@@ -306,12 +273,12 @@ function Alta-Masiva {
             continue
         }
 
-        $contrasena = Read-Host "  Contraseña" -AsSecureString
+        $contrasena = Read-Host "  Contrasena" -AsSecureString
         $contrasenaPlana = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($contrasena)
         )
         if (!(Validar-Contrasena -Contrasena $contrasenaPlana)) {
-            Registrar "Contraseña inválida para '$usuario', se omite." "ERROR"
+            Registrar "Contrasena invalida para '$usuario', se omite." "ERROR"
             $omitidos++
             continue
         }
@@ -323,7 +290,7 @@ function Alta-Masiva {
             "1" { $grupo = "reprobados" }
             "2" { $grupo = "recursadores" }
             default {
-                Registrar "Grupo inválido para '$usuario', se omite." "ERROR"
+                Registrar "Grupo invalido para '$usuario', se omite." "ERROR"
                 $omitidos++
                 continue
             }
@@ -347,7 +314,6 @@ function Cambiar-Grupo {
         return
     }
 
-    # Detectar grupo actual
     $grupo_actual = $null
     foreach ($g in @("reprobados", "recursadores")) {
         $miembros = Get-LocalGroupMember -Group $g -ErrorAction SilentlyContinue
@@ -358,36 +324,32 @@ function Cambiar-Grupo {
     }
 
     if ($null -eq $grupo_actual) {
-        Registrar "El usuario '$usuario' no pertenece a ningún grupo FTP conocido." "ERROR"
+        Registrar "El usuario '$usuario' no pertenece a ningun grupo FTP conocido." "ERROR"
         return
     }
 
     $grupo_nuevo = if ($grupo_actual -eq "reprobados") { "recursadores" } else { "reprobados" }
 
     Write-Host "El usuario '$usuario' pertenece actualmente a: $grupo_actual"
-    $confirmacion = Read-Host "¿Moverlo a '$grupo_nuevo'? (s/N)"
+    $confirmacion = Read-Host "Moverlo a '$grupo_nuevo'? (s/N)"
     if ($confirmacion -notmatch '^[Ss]$') {
         Registrar "Cambio de grupo cancelado." "INFO"
         return
     }
 
-    # Cambiar grupo
     Remove-LocalGroupMember -Group $grupo_actual -Member $usuario
     Add-LocalGroupMember -Group $grupo_nuevo -Member $usuario
 
     $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$usuario"
 
-    # Revocar permisos en grupo anterior
     $acl = Get-Acl "$RAIZ_GRUPOS\$grupo_actual"
     $acl.Access | Where-Object { $_.IdentityReference -like "*\$usuario" } | ForEach-Object {
         $acl.RemoveAccessRule($_) | Out-Null
     }
     Set-Acl -Path "$RAIZ_GRUPOS\$grupo_actual" -AclObject $acl
 
-    # Asignar permisos en grupo nuevo
     Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo_nuevo" -Identidad "$env:COMPUTERNAME\$usuario" -Permiso "Modify"
 
-    # Actualizar junction de grupo en chroot
     $junctionAntiguo = "$raiz_chroot\$grupo_actual"
     if (Test-Path $junctionAntiguo) {
         cmd /c "rmdir `"$junctionAntiguo`"" | Out-Null
@@ -413,15 +375,14 @@ function Eliminar-Usuario {
     }
 
     Write-Host ""
-    Write-Host "ADVERTENCIA: Esta acción elimina al usuario y todos sus archivos. No se puede deshacer." -ForegroundColor Red
+    Write-Host "ADVERTENCIA: Esta accion elimina al usuario y todos sus archivos. No se puede deshacer." -ForegroundColor Red
     $confirmacion = Read-Host "Escribe el nombre del usuario para confirmar"
 
     if ($confirmacion -ne $usuario) {
-        Registrar "Confirmación incorrecta. No se realizó ningún cambio." "ERROR"
+        Registrar "Confirmacion incorrecta. No se realizo ningun cambio." "ERROR"
         return
     }
 
-    # Eliminar junctions del chroot antes de borrar carpetas
     $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$usuario"
     foreach ($junction in @("general", "reprobados", "recursadores")) {
         $path = "$raiz_chroot\$junction"
@@ -430,7 +391,6 @@ function Eliminar-Usuario {
         }
     }
 
-    # Revocar permisos en carpetas compartidas
     foreach ($ruta in @($CARPETA_GENERAL, "$RAIZ_GRUPOS\reprobados", "$RAIZ_GRUPOS\recursadores")) {
         if (Test-Path $ruta) {
             $acl = Get-Acl $ruta
@@ -441,10 +401,8 @@ function Eliminar-Usuario {
         }
     }
 
-    # Eliminar usuario del sistema
     Remove-LocalUser -Name $usuario
 
-    # Eliminar directorio chroot
     if (Test-Path $raiz_chroot) {
         Remove-Item -Recurse -Force $raiz_chroot
     }
@@ -490,7 +448,7 @@ while ($true) {
     Write-Host " 6. Reiniciar sitio FTP"
     Write-Host " 7. Salir"
     Write-Host "-----------------------------------------"
-    $opcion = Read-Host " Opción"
+    $opcion = Read-Host " Opcion"
 
     switch ($opcion) {
         "1" { Alta-Usuario }
@@ -504,9 +462,9 @@ while ($true) {
             Registrar "Sitio FTP reiniciado manualmente." "OK"
         }
         "7" {
-            Registrar "Sesión terminada." "INFO"
+            Registrar "Sesion terminada." "INFO"
             exit 0
         }
-        default { Write-Host "Opción no reconocida. Intenta de nuevo." }
+        default { Write-Host "Opcion no reconocida. Intenta de nuevo." }
     }
 }
