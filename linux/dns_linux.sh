@@ -16,7 +16,7 @@ verificar_setup() {
     # evito que si se ejecuta instalar varias veces se duplique y BIND truene
     sed -i '/allow-query { any; };/d' "$NAMED_CONF"
     sed -i '/listen-on port 53 { any; };/d' "$NAMED_CONF"
-    sed -i '/listen-on-v6 port 53 { none; };/d' "$NAMED_CONF"
+    sed -i 's/listen-on-v6 port 53 { any; };//g' "$NAMED_CONF"
     sed -i 's/listen-on port 53 { 127.0.0.1; };//g' "$NAMED_CONF"
     sed -i 's/listen-on-v6 port 53 { ::1; };//g' "$NAMED_CONF"
     sed -i 's/allow-query     { localhost; };//g' "$NAMED_CONF"
@@ -48,7 +48,14 @@ verificar_setup() {
     else
         echo -e "\e[31m[ERROR] named fallo al iniciar. Revisa: journalctl -xeu named\e[0m"
     fi
-    
+
+    ip_servidor=$(ip -br addr show enp0s8 | awk '{print $3}' | cut -d'/' -f1)
+    con_name=$(nmcli -t -f NAME con show --active | grep -v lo | head -1)
+    nmcli con mod "$con_name" ipv4.ignore-auto-dns yes &>/dev/null
+    nmcli con mod "$con_name" ipv4.dns "$ip_servidor" &>/dev/null
+    nmcli con up "$con_name" &>/dev/null
+    echo "nameserver $ip_servidor" > /etc/resolv.conf
+    echo "[OK] Sistema apuntando a DNS local: $ip_servidor"
     read -p "Presione Enter..."
 }
 
