@@ -61,9 +61,17 @@ function Asignar-Permiso {
         [string]$Tipo = "Allow"
     )
     $acl = Get-Acl $Ruta
-    $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $Identidad, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
-    )
+    try {
+        $cuenta = New-Object System.Security.Principal.NTAccount($Identidad)
+        $sid = $cuenta.Translate([System.Security.Principal.SecurityIdentifier])
+        $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $sid, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
+        )
+    } catch {
+        $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $Identidad, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
+        )
+    }
     $acl.SetAccessRule($regla)
     Set-Acl -Path $Ruta -AclObject $acl
 }
