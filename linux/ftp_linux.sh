@@ -102,6 +102,11 @@ instalar_entorno() {
         fi
     done
 
+    # Permitir /sbin/nologin como shell válido para usuarios FTP
+if ! grep -q "^/sbin/nologin$" /etc/shells; then
+    echo "/sbin/nologin" >> /etc/shells
+fi
+
     # Permisos en carpeta general: root la posee, todos pueden leer/ejecutar
     # Los usuarios autenticados tendrán ACL de escritura
     chown root:root "$CARPETA_GENERAL"
