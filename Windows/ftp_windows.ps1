@@ -114,6 +114,18 @@ function Instalar-Entorno {
         Registrar "Junction de general en anonimo creado." "OK"
     }
 
+    # Carpeta Public para acceso anonimo (IIS busca LocalUser\Public)
+    $carpetaPublic = "$RAIZ_USUARIOS\LocalUser\Public"
+    if (!(Test-Path $carpetaPublic)) {
+        New-Item -ItemType Directory -Path $carpetaPublic -Force | Out-Null
+        Registrar "Carpeta Public para anonimo creada." "OK"
+    }
+    $junctionPublic = "$carpetaPublic\general"
+    if (!(Test-Path $junctionPublic)) {
+        cmd /c "mklink /J `"$junctionPublic`" `"$CARPETA_GENERAL`"" | Out-Null
+        Registrar "Junction de general en Public creado." "OK"
+    }
+
     foreach ($grupo in @("reprobados", "recursadores")) {
         Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo" -Identidad "$env:COMPUTERNAME\$grupo" -Permiso "Modify"
     }
@@ -123,7 +135,8 @@ function Instalar-Entorno {
         Registrar "Sitio FTP anterior eliminado para reconfigurar." "INFO"
     }
 
-    New-WebFtpSite -Name $SITIO_FTP -Port $PUERTO_FTP -PhysicalPath $RAIZ_FTP -Force | Out-Null
+    # PhysicalPath apunta a usuarios para que IIS encuentre LocalUser\<usuario>
+    New-WebFtpSite -Name $SITIO_FTP -Port $PUERTO_FTP -PhysicalPath $RAIZ_USUARIOS -Force | Out-Null
     Registrar "Sitio FTP '$SITIO_FTP' creado en puerto $PUERTO_FTP." "OK"
 
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
