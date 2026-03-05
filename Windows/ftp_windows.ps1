@@ -1,4 +1,4 @@
-# Servidor FTP - Windows
+# Servicio FTP - Windows
 
 # --- Rutas base ---
 $RAIZ_FTP       = "C:\inetpub\ftp"
@@ -9,6 +9,8 @@ $CARPETA_ANONIMO = "$RAIZ_FTP\anonimo"
 $SITIO_FTP      = "ServidorFTP"
 $PUERTO_FTP     = 21
 $ARCHIVO_LOG    = "C:\logs\gestion_ftp.log"
+
+#=============== FUNCIONES ====================
 
 function Registrar {
     param(
@@ -109,7 +111,7 @@ function Instalar-Entorno {
 
     # Permisos carpeta general: todos los usuarios autenticados leen y escriben
     Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Users" -Permiso "ReadAndExecute"
-    Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "IUSR" -Permiso "ReadAndExecute"
+    Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "BUILTIN\\IIS_IUSRS" -Permiso "ReadAndExecute"
 
     # Copiar junction (enlace) de general en anonimo si no existe
     $junctionPath = "$CARPETA_ANONIMO\general"
@@ -162,8 +164,17 @@ function Instalar-Entorno {
         Registrar "Puerto 21 habilitado en firewall de Windows." "OK"
     }
 
-    # Iniciar sitio FTP
-    Start-WebSite -Name $SITIO_FTP
+    # Iniciar sitio FTP (delay para que IIS registre el sitio correctamente)
+    Start-Sleep -Seconds 2
+    try {
+        Start-WebSite -Name $SITIO_FTP -ErrorAction Stop
+        Registrar "Sitio FTP iniciado correctamente." "OK"
+    } catch {
+        Registrar "Advertencia al iniciar el sitio, intentando con iisreset..." "INFO"
+        iisreset /restart | Out-Null
+        Start-Sleep -Seconds 3
+        Start-WebSite -Name $SITIO_FTP -ErrorAction SilentlyContinue
+    }
     Registrar "Entorno FTP listo y sitio activo." "OK"
 }
 
