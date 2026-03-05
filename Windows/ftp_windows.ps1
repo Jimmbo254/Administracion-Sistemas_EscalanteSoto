@@ -1,14 +1,14 @@
 # Servicio FTP - Windows
 
 # --- Rutas base ---
-$RAIZ_FTP       = "C:\inetpub\ftp"
-$RAIZ_USUARIOS  = "$RAIZ_FTP\usuarios"
-$RAIZ_GRUPOS    = "$RAIZ_FTP\grupos"
+$RAIZ_FTP        = "C:\inetpub\ftp"
+$RAIZ_USUARIOS   = "$RAIZ_FTP\usuarios"
+$RAIZ_GRUPOS     = "$RAIZ_FTP\grupos"
 $CARPETA_GENERAL = "$RAIZ_FTP\general"
 $CARPETA_ANONIMO = "$RAIZ_FTP\anonimo"
-$SITIO_FTP      = "ServidorFTP"
-$PUERTO_FTP     = 21
-$ARCHIVO_LOG    = "C:\logs\gestion_ftp.log"
+$SITIO_FTP       = "ServidorFTP"
+$PUERTO_FTP      = 21
+$ARCHIVO_LOG     = "C:\logs\gestion_ftp.log"
 
 #=============== FUNCIONES ====================
 
@@ -19,10 +19,8 @@ function Registrar {
     )
     $fecha = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $linea = "[$fecha] [$Tipo] $Mensaje"
-
     if (!(Test-Path "C:\logs")) { New-Item -ItemType Directory -Path "C:\logs" | Out-Null }
     Add-Content -Path $ARCHIVO_LOG -Value $linea
-
     switch ($Tipo) {
         "OK"    { Write-Host $linea -ForegroundColor Green }
         "ERROR" { Write-Host $linea -ForegroundColor Red }
@@ -42,11 +40,11 @@ function Verificar-Admin {
 function Validar-Contrasena {
     param([string]$Contrasena)
     $longitud = $Contrasena.Length
-    if ($longitud -lt 8 -or $longitud -gt 15)          { return $false }
-    if ($Contrasena -notmatch '[A-Z]')                  { return $false }
-    if ($Contrasena -notmatch '[a-z]')                  { return $false }
-    if ($Contrasena -notmatch '[0-9]')                  { return $false }
-    if ($Contrasena -notmatch '[^a-zA-Z0-9]')           { return $false }
+    if ($longitud -lt 8 -or $longitud -gt 15) { return $false }
+    if ($Contrasena -notmatch '[A-Z]')         { return $false }
+    if ($Contrasena -notmatch '[a-z]')         { return $false }
+    if ($Contrasena -notmatch '[0-9]')         { return $false }
+    if ($Contrasena -notmatch '[^a-zA-Z0-9]') { return $false }
     return $true
 }
 
@@ -57,12 +55,17 @@ function Asignar-Permiso {
         [string]$Permiso,
         [string]$Tipo = "Allow"
     )
-    $acl = Get-Acl $Ruta
-    $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $Identidad, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
-    )
-    $acl.SetAccessRule($regla)
-    Set-Acl -Path $Ruta -AclObject $acl
+    try {
+        $acl = Get-Acl $Ruta
+        $cuenta = New-Object System.Security.Principal.NTAccount($Identidad)
+        $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $cuenta, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
+        )
+        $acl.SetAccessRule($regla)
+        Set-Acl -Path $Ruta -AclObject $acl
+    } catch {
+        Registrar "Advertencia al asignar permiso en '$Ruta' para '$Identidad': $_" "INFO"
+    }
 }
 
 function Instalar-Entorno {
@@ -126,6 +129,10 @@ function Instalar-Entorno {
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
 
+    # Deshabilitar SSL para permitir conexiones sin cifrado
+    Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
+    Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
+
     Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
         accessType  = "Allow"
         users       = ""
@@ -169,7 +176,7 @@ function Crear-Usuario {
     )
 
     $pass = ConvertTo-SecureString $Contrasena -AsPlainText -Force
-    New-LocalUser -Name $Usuario -Password $pass -PasswordNeverExpires $true -UserMayNotChangePassword $false | Out-Null
+    New-LocalUser -Name $Usuario -Password $pass -PasswordNeverExpires | Out-Null
     Add-LocalGroupMember -Group $Grupo -Member $Usuario
     Registrar "Usuario '$Usuario' creado y agregado al grupo '$Grupo'." "OK"
 
