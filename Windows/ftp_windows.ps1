@@ -1,14 +1,13 @@
 # Servicio FTP - Windows
 
 # --- Rutas base ---
-$RAIZ_FTP        = "C:\inetpub\ftp"
-$RAIZ_USUARIOS   = "$RAIZ_FTP\usuarios"
+$RAIZ_FTP        = "C:\FTP"
+$RAIZ_USUARIOS   = "$RAIZ_FTP\LocalUser"
 $RAIZ_GRUPOS     = "$RAIZ_FTP\grupos"
-$CARPETA_GENERAL = "$RAIZ_FTP\general"
-$CARPETA_ANONIMO = "$RAIZ_FTP\anonimo"
+$CARPETA_GENERAL = "$RAIZ_USUARIOS\Public\general"
 $SITIO_FTP       = "ServidorFTP"
 $PUERTO_FTP      = 21
-$ARCHIVO_LOG     = "C:\logs\gestion_ftp.log"
+$ARCHIVO_LOG     = "$RAIZ_FTP\logs\gestion_ftp.log"
 
 #=============== FUNCIONES ====================
 
@@ -19,7 +18,8 @@ function Registrar {
     )
     $fecha = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $linea = "[$fecha] [$Tipo] $Mensaje"
-    if (!(Test-Path "C:\logs")) { New-Item -ItemType Directory -Path "C:\logs" | Out-Null }
+    $logDir = Split-Path $ARCHIVO_LOG
+    if (!(Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     Add-Content -Path $ARCHIVO_LOG -Value $linea
     switch ($Tipo) {
         "OK"    { Write-Host $linea -ForegroundColor Green }
@@ -51,20 +51,35 @@ function Validar-Contrasena {
 function Asignar-Permiso {
     param(
         [string]$Ruta,
-        [string]$Identidad,
-        [string]$Permiso,
-        [string]$Tipo = "Allow"
+        [string]$Usuario,
+        [string]$Permiso = "Modify"
     )
     try {
         $acl = Get-Acl $Ruta
-        $cuenta = New-Object System.Security.Principal.NTAccount($Identidad)
         $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $cuenta, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
+            $Usuario, $Permiso, "ContainerInherit,ObjectInherit", "None", "Allow"
         )
         $acl.SetAccessRule($regla)
         Set-Acl -Path $Ruta -AclObject $acl
     } catch {
-        Registrar "Advertencia al asignar permiso en '$Ruta' para '$Identidad': $_" "INFO"
+        Registrar "Advertencia al asignar permiso en '$Ruta' para '$Usuario'." "INFO"
+    }
+}
+
+function Quitar-Permiso {
+    param(
+        [string]$Ruta,
+        [string]$Usuario
+    )
+    if (!(Test-Path $Ruta)) { return }
+    try {
+        $acl = Get-Acl $Ruta
+        $acl.Access | Where-Object { $_.IdentityReference -like "*\$Usuario" } | ForEach-Object {
+            $acl.RemoveAccessRule($_) | Out-Null
+        }
+        Set-Acl -Path $Ruta -AclObject $acl
+    } catch {
+        Registrar "Advertencia al quitar permiso en '$Ruta' para '$Usuario'." "INFO"
     }
 }
 
@@ -86,10 +101,9 @@ function Instalar-Entorno {
 
     $directorios = @(
         $CARPETA_GENERAL,
-        "$CARPETA_ANONIMO\general",
-        $RAIZ_USUARIOS,
         "$RAIZ_GRUPOS\reprobados",
-        "$RAIZ_GRUPOS\recursadores"
+        "$RAIZ_GRUPOS\recursadores",
+        "$RAIZ_FTP\logs"
     )
     foreach ($dir in $directorios) {
         if (!(Test-Path $dir)) {
@@ -105,62 +119,43 @@ function Instalar-Entorno {
         }
     }
 
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Usuarios" -Permiso "ReadAndExecute"
-    Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "BUILTIN\IIS_IUSRS" -Permiso "ReadAndExecute"
-
-    $junctionPath = "$CARPETA_ANONIMO\general"
-    if (!(Test-Path $junctionPath)) {
-        cmd /c "mklink /J `"$junctionPath`" `"$CARPETA_GENERAL`"" | Out-Null
-        Registrar "Junction de general en anonimo creado." "OK"
+    # Usuario anonimo local para acceso publico de solo lectura
+    if (!(Get-LocalUser -Name "ftp_anonymous" -ErrorAction SilentlyContinue)) {
+        $anonPass = ConvertTo-SecureString "Anon@FTP2024!" -AsPlainText -Force
+        New-LocalUser -Name "ftp_anonymous" -Password $anonPass -PasswordNeverExpires | Out-Null
+        Registrar "Usuario 'ftp_anonymous' creado." "OK"
     }
 
-    # Carpeta Public para acceso anonimo (IIS busca LocalUser\Public)
-    $carpetaPublic = "$RAIZ_USUARIOS\LocalUser\Public"
-    if (!(Test-Path $carpetaPublic)) {
-        New-Item -ItemType Directory -Path $carpetaPublic -Force | Out-Null
-        Registrar "Carpeta Public para anonimo creada." "OK"
-    }
-    $junctionPublic = "$carpetaPublic\general"
-    if (!(Test-Path $junctionPublic)) {
-        cmd /c "mklink /J `"$junctionPublic`" `"$CARPETA_GENERAL`"" | Out-Null
-        Registrar "Junction de general en Public creado." "OK"
+    # Permisos carpeta general: ftp_anonymous solo lectura
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Usuario "ftp_anonymous" -Permiso "ReadAndExecute"
+
+    if (!(Get-WebSite -Name $SITIO_FTP -ErrorAction SilentlyContinue)) {
+        New-WebFtpSite -Name $SITIO_FTP -Port $PUERTO_FTP -PhysicalPath $RAIZ_USUARIOS -Force | Out-Null
+        Registrar "Sitio FTP '$SITIO_FTP' creado en puerto $PUERTO_FTP." "OK"
     }
 
-    foreach ($grupo in @("reprobados", "recursadores")) {
-        Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo" -Identidad "$env:COMPUTERNAME\$grupo" -Permiso "Modify"
-    }
+    # Aislamiento por directorio de usuario
+    Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.userIsolation.mode -Value "IsolateDirectory"
 
-    if (Get-WebSite -Name $SITIO_FTP -ErrorAction SilentlyContinue) {
-        Remove-WebSite -Name $SITIO_FTP
-        Registrar "Sitio FTP anterior eliminado para reconfigurar." "INFO"
-    }
+    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
 
-    # PhysicalPath apunta a usuarios para que IIS encuentre LocalUser\<usuario>
-    New-WebFtpSite -Name $SITIO_FTP -Port $PUERTO_FTP -PhysicalPath $RAIZ_USUARIOS -Force | Out-Null
-    Registrar "Sitio FTP '$SITIO_FTP' creado en puerto $PUERTO_FTP." "OK"
+    # Desbloquear secciones FTP
+    & $appcmd unlock config -section:system.ftpServer/security/authentication/anonymousAuthentication | Out-Null
+    & $appcmd unlock config -section:system.ftpServer/security/authentication/basicAuthentication     | Out-Null
+    & $appcmd unlock config -section:system.ftpServer/security/authorization                          | Out-Null
 
-    Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
-    Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
+    # Configurar autenticacion
+    & $appcmd set config "$SITIO_FTP" -section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:true /userName:ftp_anonymous /commit:apphost | Out-Null
+    & $appcmd set config "$SITIO_FTP" -section:system.ftpServer/security/authentication/basicAuthentication /enabled:true /commit:apphost | Out-Null
 
-    # Deshabilitar SSL para permitir conexiones sin cifrado
+    # Reglas de autorizacion: anonimo solo lectura, autenticados lectura y escritura
+    & $appcmd clear config "$SITIO_FTP" -section:system.ftpServer/security/authorization /commit:apphost | Out-Null
+    & $appcmd set config "$SITIO_FTP" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='?',permissions='Read']" /commit:apphost | Out-Null
+    & $appcmd set config "$SITIO_FTP" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='*',permissions='Read,Write']" /commit:apphost | Out-Null
+
+    # Deshabilitar SSL
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
-
-    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
-        accessType  = "Allow"
-        users       = ""
-        roles       = ""
-        permissions = "Read"
-    } -PSPath "IIS:\" -Location "$SITIO_FTP"
-
-    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
-        accessType  = "Allow"
-        users       = "*"
-        roles       = ""
-        permissions = "Read,Write"
-    } -PSPath "IIS:\" -Location "$SITIO_FTP"
-
-    Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.userIsolation.mode -Value "IsolateAllDirectories"
 
     $reglaFirewall = Get-NetFirewallRule -DisplayName "FTP Puerto 21" -ErrorAction SilentlyContinue
     if (-not $reglaFirewall) {
@@ -168,17 +163,8 @@ function Instalar-Entorno {
         Registrar "Puerto 21 habilitado en firewall de Windows." "OK"
     }
 
-    Start-Sleep -Seconds 2
-    try {
-        Start-WebSite -Name $SITIO_FTP -ErrorAction Stop
-        Registrar "Sitio FTP iniciado correctamente." "OK"
-    } catch {
-        Registrar "Advertencia al iniciar el sitio, intentando con iisreset..." "INFO"
-        iisreset /restart | Out-Null
-        Start-Sleep -Seconds 3
-        Start-WebSite -Name $SITIO_FTP -ErrorAction SilentlyContinue
-    }
-    Registrar "Entorno FTP listo y sitio activo." "OK"
+    Restart-Service ftpsvc -Force
+    Registrar "Entorno FTP listo y servicio activo." "OK"
 }
 
 function Crear-Usuario {
@@ -193,31 +179,20 @@ function Crear-Usuario {
     Add-LocalGroupMember -Group $Grupo -Member $Usuario
     Registrar "Usuario '$Usuario' creado y agregado al grupo '$Grupo'." "OK"
 
-    $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$Usuario"
-    $carpetas = @(
-        "$raiz_chroot\$Usuario",
-        "$raiz_chroot\general",
-        "$raiz_chroot\$Grupo"
-    )
-    foreach ($carpeta in $carpetas) {
-        if (!(Test-Path $carpeta)) {
-            New-Item -ItemType Directory -Path $carpeta -Force | Out-Null
-        }
-    }
+    # IIS FTP con IsolateDirectory busca: \LocalUser\<usuario>\<usuario>
+    $raiz_chroot = "$RAIZ_USUARIOS\$Usuario"
+    New-Item -ItemType Directory -Path "$raiz_chroot\$Usuario" -Force | Out-Null
 
-    Asignar-Permiso -Ruta "$raiz_chroot\$Usuario" -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
+    # Permisos carpeta personal
+    Asignar-Permiso -Ruta "$raiz_chroot\$Usuario" -Usuario $Usuario
 
-    $junctionGeneral = "$raiz_chroot\general"
-    if (!(Test-Path $junctionGeneral)) {
-        cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
-    }
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
+    # Permisos en general y grupo
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Usuario $Usuario
+    Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$Grupo" -Usuario $Usuario
 
-    $junctionGrupo = "$raiz_chroot\$Grupo"
-    if (!(Test-Path $junctionGrupo)) {
-        cmd /c "mklink /J `"$junctionGrupo`" `"$RAIZ_GRUPOS\$Grupo`"" | Out-Null
-    }
-    Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$Grupo" -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
+    # Enlaces simbolicos /D (no junctions) para que IIS FTP los reconozca
+    cmd /c "mklink /D `"$raiz_chroot\general`" `"$CARPETA_GENERAL`"" | Out-Null
+    cmd /c "mklink /D `"$raiz_chroot\$Grupo`" `"$RAIZ_GRUPOS\$Grupo`"" | Out-Null
 
     Registrar "Estructura de directorios y permisos asignados a '$Usuario'." "OK"
 }
@@ -360,25 +335,17 @@ function Cambiar-Grupo {
     Remove-LocalGroupMember -Group $grupo_actual -Member $usuario
     Add-LocalGroupMember -Group $grupo_nuevo -Member $usuario
 
-    $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$usuario"
+    $raiz_chroot = "$RAIZ_USUARIOS\$usuario"
 
-    $acl = Get-Acl "$RAIZ_GRUPOS\$grupo_actual"
-    $acl.Access | Where-Object { $_.IdentityReference -like "*\$usuario" } | ForEach-Object {
-        $acl.RemoveAccessRule($_) | Out-Null
-    }
-    Set-Acl -Path "$RAIZ_GRUPOS\$grupo_actual" -AclObject $acl
+    Quitar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo_actual" -Usuario $usuario
+    Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo_nuevo" -Usuario $usuario
 
-    Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo_nuevo" -Identidad "$env:COMPUTERNAME\$usuario" -Permiso "Modify"
-
-    $junctionAntiguo = "$raiz_chroot\$grupo_actual"
-    if (Test-Path $junctionAntiguo) {
-        cmd /c "rmdir `"$junctionAntiguo`"" | Out-Null
-    }
-    $junctionNuevo = "$raiz_chroot\$grupo_nuevo"
-    if (!(Test-Path $junctionNuevo)) {
-        New-Item -ItemType Directory -Path $junctionNuevo -Force | Out-Null
-        cmd /c "rmdir `"$junctionNuevo`"" | Out-Null
-        cmd /c "mklink /J `"$junctionNuevo`" `"$RAIZ_GRUPOS\$grupo_nuevo`"" | Out-Null
+    # Actualizar enlace simbolico de grupo
+    $linkAntiguo = "$raiz_chroot\$grupo_actual"
+    $linkNuevo   = "$raiz_chroot\$grupo_nuevo"
+    if (Test-Path $linkAntiguo) { cmd /c "rmdir `"$linkAntiguo`"" | Out-Null }
+    if (!(Test-Path $linkNuevo)) {
+        cmd /c "mklink /D `"$linkNuevo`" `"$RAIZ_GRUPOS\$grupo_nuevo`"" | Out-Null
     }
 
     Registrar "Usuario '$usuario' movido de '$grupo_actual' a '$grupo_nuevo'." "OK"
@@ -403,27 +370,21 @@ function Eliminar-Usuario {
         return
     }
 
-    $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$usuario"
-    foreach ($junction in @("general", "reprobados", "recursadores")) {
-        $path = "$raiz_chroot\$junction"
-        if (Test-Path $path) {
-            cmd /c "rmdir `"$path`"" | Out-Null
-        }
-    }
-
-    foreach ($ruta in @($CARPETA_GENERAL, "$RAIZ_GRUPOS\reprobados", "$RAIZ_GRUPOS\recursadores")) {
-        if (Test-Path $ruta) {
-            $acl = Get-Acl $ruta
-            $acl.Access | Where-Object { $_.IdentityReference -like "*\$usuario" } | ForEach-Object {
-                $acl.RemoveAccessRule($_) | Out-Null
-            }
-            Set-Acl -Path $ruta -AclObject $acl
-        }
+    Quitar-Permiso -Ruta $CARPETA_GENERAL -Usuario $usuario
+    foreach ($g in @("reprobados", "recursadores")) {
+        Quitar-Permiso -Ruta "$RAIZ_GRUPOS\$g" -Usuario $usuario
+        Remove-LocalGroupMember -Group $g -Member $usuario -ErrorAction SilentlyContinue
     }
 
     Remove-LocalUser -Name $usuario
 
+    $raiz_chroot = "$RAIZ_USUARIOS\$usuario"
     if (Test-Path $raiz_chroot) {
+        # Eliminar enlaces simbolicos primero
+        foreach ($link in @("general", "reprobados", "recursadores")) {
+            $path = "$raiz_chroot\$link"
+            if (Test-Path $path) { cmd /c "rmdir `"$path`"" | Out-Null }
+        }
         Remove-Item -Recurse -Force $raiz_chroot
     }
 
@@ -465,7 +426,7 @@ while ($true) {
     Write-Host " 3. Cambiar usuario de grupo"
     Write-Host " 4. Eliminar usuario"
     Write-Host " 5. Listar usuarios por grupo"
-    Write-Host " 6. Reiniciar sitio FTP"
+    Write-Host " 6. Reiniciar servicio FTP"
     Write-Host " 7. Salir"
     Write-Host "-----------------------------------------"
     $opcion = Read-Host " Opcion"
@@ -477,9 +438,8 @@ while ($true) {
         "4" { Eliminar-Usuario }
         "5" { Listar-Usuarios }
         "6" {
-            Stop-WebSite -Name $SITIO_FTP
-            Start-WebSite -Name $SITIO_FTP
-            Registrar "Sitio FTP reiniciado manualmente." "OK"
+            Restart-Service ftpsvc -Force
+            Registrar "Servicio FTP reiniciado manualmente." "OK"
         }
         "7" {
             Registrar "Sesion terminada." "INFO"
