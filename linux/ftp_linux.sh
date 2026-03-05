@@ -208,7 +208,7 @@ crear_usuario() {
     local grupo="$3"
 
     # Crear usuario del sistema sin shell de login ni directorio home
-    useradd -M -s /sbin/nologin "$usuario"
+    useradd -M -s /sbin/nologin -d /srv/ftp/usuarios/$usuario "$usuario"
     echo "$usuario:$contrasena" | chpasswd
     usermod -aG "$grupo" "$usuario"
 
