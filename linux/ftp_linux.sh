@@ -13,6 +13,7 @@ RAIZ_FTP="/srv/ftp"
 RAIZ_USUARIOS="$RAIZ_FTP/usuarios"
 RAIZ_GRUPOS="$RAIZ_FTP/grupos"
 CARPETA_GENERAL="$RAIZ_FTP/general"
+CARPETA_ANONIMO="$RAIZ_FTP/anonimo"
 CONF_VSFTPD="/etc/vsftpd/vsftpd.conf"
 LISTA_USUARIOS="/etc/vsftpd/user_list"
 
@@ -83,6 +84,7 @@ instalar_entorno() {
     # Crear estructura base de directorios
     local directorios=(
         "$CARPETA_GENERAL"
+        "$CARPETA_ANONIMO/general"
         "$RAIZ_USUARIOS"
         "$RAIZ_GRUPOS/reprobados"
         "$RAIZ_GRUPOS/recursadores"
@@ -111,16 +113,32 @@ instalar_entorno() {
     # Crear directorio requerido por vsftpd para chroot
     mkdir -p /var/run/vsftpd/empty
 
-    # Permisos en carpeta general: root la posee, todos pueden leer/ejecutar
-    # Los usuarios autenticados tendrán ACL de escritura
+    # Permisos carpeta general: root la posee, accesible para todos
     chown root:root "$CARPETA_GENERAL"
     chmod 755 "$CARPETA_GENERAL"
 
-    # Permisos en carpetas de grupo: el grupo tiene escritura
+    # Bind mount de general en carpeta del anonimo (carpeta compartida)
+    if ! mountpoint -q "$CARPETA_ANONIMO/general"; then
+        mount --bind "$CARPETA_GENERAL" "$CARPETA_ANONIMO/general"
+        registrar "Bind mount de general en anonimo realizado." "OK"
+    fi
+
+    # Permisos carpeta anonimo
+    chown root:root "$CARPETA_ANONIMO"
+    chmod 755 "$CARPETA_ANONIMO"
+
+    # Permisos carpetas de grupo: el grupo tiene escritura
     for grupo in reprobados recursadores; do
         chown root:"$grupo" "$RAIZ_GRUPOS/$grupo"
         chmod 775 "$RAIZ_GRUPOS/$grupo"
     done
+
+    # Permisos carpeta usuarios: accesible para vsftpd
+    chown root:root "$RAIZ_USUARIOS"
+    chmod 755 "$RAIZ_USUARIOS"
+
+    # Carpeta grupos: no accesible para otros
+    chmod 750 "$RAIZ_GRUPOS"
 
     # Generar archivo vsftpd.conf
     cp "$CONF_VSFTPD" "${CONF_VSFTPD}.respaldo" 2>/dev/null
@@ -139,12 +157,13 @@ local_enable=YES
 write_enable=YES
 local_umask=022
 
-# Opciones de acceso anónimo (solo lectura en /general)
-anon_root=/srv/ftp
+# Opciones de acceso anónimo (solo lectura en /anonimo/general)
+anon_root=/srv/ftp/anonimo
 no_anon_password=YES
 anon_upload_enable=NO
 anon_mkdir_write_enable=NO
 anon_other_write_enable=NO
+anon_world_readable_only=YES
 
 # Registro de transferencias
 xferlog_enable=YES
@@ -171,11 +190,13 @@ user_sub_token=%u
 local_root=/srv/ftp/usuarios/%u
 FINCONF
 
-    # Crear lista de usuarios si no existe, agregar ftp (anónimo)
+    # Crear lista de usuarios si no existe, agregar ftp y anonymous
     touch "$LISTA_USUARIOS"
-    if ! grep -q "^ftp$" "$LISTA_USUARIOS" 2>/dev/null; then
-        echo "ftp" >> "$LISTA_USUARIOS"
-    fi
+    for anonimo in ftp anonymous; do
+        if ! grep -q "^$anonimo$" "$LISTA_USUARIOS" 2>/dev/null; then
+            echo "$anonimo" >> "$LISTA_USUARIOS"
+        fi
+    done
 
     # Abrir puerto FTP en el firewall
     if command -v firewall-cmd &>/dev/null; then
@@ -198,7 +219,6 @@ FINCONF
     registrar "Entorno FTP listo y servicio activo." "OK"
 }
 
-
 # Crea el usuario en el sistema, asigna grupo, construye la
 # estructura de directorios dentro de su chroot y aplica ACLs.
 # Parámetros: $1=nombre_usuario  $2=contrasena  $3=grupo
@@ -208,7 +228,8 @@ crear_usuario() {
     local grupo="$3"
 
     # Crear usuario del sistema sin shell de login ni directorio home
-    useradd -M -s /sbin/nologin -d /srv/ftp/usuarios/$usuario "$usuario"
+    # -d apunta directo al chroot para evitar conflictos con vsftpd
+    useradd -M -s /sbin/nologin -d "/srv/ftp/usuarios/$usuario" "$usuario"
     echo "$usuario:$contrasena" | chpasswd
     usermod -aG "$grupo" "$usuario"
 
@@ -286,7 +307,6 @@ alta_usuario() {
 
     crear_usuario "$usuario" "$contrasena" "$grupo"
 }
-
 
 alta_masiva() {
     echo ""
@@ -480,7 +500,7 @@ listar_usuarios() {
     echo ""
 }
 
-# MENU
+# ============== MENU ==============
 
 verificar_root
 instalar_entorno
@@ -501,11 +521,11 @@ while true; do
     read -rp " Opción: " opcion
 
     case "$opcion" in
-        1) alta_usuario     ;;
-        2) alta_masiva      ;;
-        3) cambiar_grupo    ;;
-        4) eliminar_usuario ;;
-        5) listar_usuarios  ;;
+        1) alta_usuario      ;;
+        2) alta_masiva       ;;
+        3) cambiar_grupo     ;;
+        4) eliminar_usuario  ;;
+        5) listar_usuarios   ;;
         6)
             systemctl restart vsftpd
             registrar "Servicio vsftpd reiniciado manualmente." "OK"
@@ -515,6 +535,10 @@ while true; do
             exit 0
             ;;
         *)
+            echo "Opción no reconocida. Intenta de nuevo."
+            ;;
+    esac
+done
             echo "Opción no reconocida. Intenta de nuevo."
             ;;
     esac
