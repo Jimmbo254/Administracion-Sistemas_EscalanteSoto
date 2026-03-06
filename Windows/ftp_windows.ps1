@@ -48,6 +48,11 @@ function Validar-Contrasena {
     return $true
 }
 
+# FIX: se cambio SetAccessRule por AddAccessRule para que no reemplace
+# entradas existentes del mismo usuario, sino que las acumule correctamente.
+# SetAccessRule reemplazaba la regla si ya existia una para ese usuario,
+# lo que causaba que permisos previos (como los de general) se perdieran
+# o quedaran en estado inconsistente tras operaciones sucesivas.
 function Asignar-Permiso {
     param(
         [string]$Ruta,
@@ -56,15 +61,35 @@ function Asignar-Permiso {
         [string]$Tipo = "Allow"
     )
     try {
-        $acl = Get-Acl $Ruta
+        $acl    = Get-Acl $Ruta
         $cuenta = New-Object System.Security.Principal.NTAccount($Identidad)
-        $regla = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $regla  = New-Object System.Security.AccessControl.FileSystemAccessRule(
             $cuenta, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
         )
-        $acl.SetAccessRule($regla)
+        # AddAccessRule agrega la regla sin eliminar entradas previas del usuario
+        $acl.AddAccessRule($regla)
         Set-Acl -Path $Ruta -AclObject $acl
     } catch {
         Registrar "Advertencia al asignar permiso en '$Ruta' para '$Identidad': $_" "INFO"
+    }
+}
+
+# Elimina todas las reglas explicitas de un usuario sobre una ruta.
+# Se usa al cambiar de grupo y al eliminar usuario para limpiar ACLs huerfanas.
+function Revocar-Permiso {
+    param(
+        [string]$Ruta,
+        [string]$Usuario
+    )
+    try {
+        if (!(Test-Path $Ruta)) { return }
+        $acl = Get-Acl $Ruta
+        $acl.Access |
+            Where-Object { $_.IdentityReference -like "*\$Usuario" } |
+            ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+        Set-Acl -Path $Ruta -AclObject $acl
+    } catch {
+        Registrar "Advertencia al revocar permiso en '$Ruta' para '$Usuario': $_" "INFO"
     }
 }
 
@@ -207,16 +232,20 @@ function Crear-Usuario {
 
     Asignar-Permiso -Ruta "$raiz_chroot\$Usuario" -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
 
+    # Crear junction de general y asignar permiso Modify sobre el destino real
     $junctionGeneral = "$raiz_chroot\general"
-    if (!(Test-Path $junctionGeneral)) {
-        cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
+    if (Test-Path $junctionGeneral) {
+        cmd /c "rmdir `"$junctionGeneral`"" | Out-Null
     }
+    cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
     Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
 
+    # Crear junction de grupo y asignar permiso Modify sobre el destino real
     $junctionGrupo = "$raiz_chroot\$Grupo"
-    if (!(Test-Path $junctionGrupo)) {
-        cmd /c "mklink /J `"$junctionGrupo`" `"$RAIZ_GRUPOS\$Grupo`"" | Out-Null
+    if (Test-Path $junctionGrupo) {
+        cmd /c "rmdir `"$junctionGrupo`"" | Out-Null
     }
+    cmd /c "mklink /J `"$junctionGrupo`" `"$RAIZ_GRUPOS\$Grupo`"" | Out-Null
     Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$Grupo" -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
 
     Registrar "Estructura de directorios y permisos asignados a '$Usuario'." "OK"
@@ -362,24 +391,37 @@ function Cambiar-Grupo {
 
     $raiz_chroot = "$RAIZ_USUARIOS\LocalUser\$usuario"
 
-    $acl = Get-Acl "$RAIZ_GRUPOS\$grupo_actual"
-    $acl.Access | Where-Object { $_.IdentityReference -like "*\$usuario" } | ForEach-Object {
-        $acl.RemoveAccessRule($_) | Out-Null
-    }
-    Set-Acl -Path "$RAIZ_GRUPOS\$grupo_actual" -AclObject $acl
+    # Revocar permiso del usuario sobre el grupo anterior
+    Revocar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo_actual" -Usuario $usuario
 
+    # Asignar permiso sobre el grupo nuevo
     Asignar-Permiso -Ruta "$RAIZ_GRUPOS\$grupo_nuevo" -Identidad "$env:COMPUTERNAME\$usuario" -Permiso "Modify"
 
+    # Actualizar junction del grupo en el chroot
     $junctionAntiguo = "$raiz_chroot\$grupo_actual"
     if (Test-Path $junctionAntiguo) {
         cmd /c "rmdir `"$junctionAntiguo`"" | Out-Null
     }
     $junctionNuevo = "$raiz_chroot\$grupo_nuevo"
-    if (!(Test-Path $junctionNuevo)) {
-        New-Item -ItemType Directory -Path $junctionNuevo -Force | Out-Null
+    if (Test-Path $junctionNuevo) {
         cmd /c "rmdir `"$junctionNuevo`"" | Out-Null
-        cmd /c "mklink /J `"$junctionNuevo`" `"$RAIZ_GRUPOS\$grupo_nuevo`"" | Out-Null
     }
+    New-Item -ItemType Directory -Path $junctionNuevo -Force | Out-Null
+    cmd /c "rmdir `"$junctionNuevo`"" | Out-Null
+    cmd /c "mklink /J `"$junctionNuevo`" `"$RAIZ_GRUPOS\$grupo_nuevo`"" | Out-Null
+
+    # FIX: re-crear junction de general y re-aplicar su permiso Modify.
+    # En Windows los permisos NTFS se aplican sobre el destino real de la
+    # junction, no sobre ella misma. Si AddAccessRule acumulo entradas
+    # inconsistentes en operaciones previas, limpiarlas y reaplicarlas
+    # garantiza que el usuario pueda escribir en general tras el cambio.
+    $junctionGeneral = "$raiz_chroot\general"
+    if (Test-Path $junctionGeneral) {
+        cmd /c "rmdir `"$junctionGeneral`"" | Out-Null
+    }
+    cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
+    Revocar-Permiso -Ruta $CARPETA_GENERAL -Usuario $usuario
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$usuario" -Permiso "Modify"
 
     Registrar "Usuario '$usuario' movido de '$grupo_actual' a '$grupo_nuevo'." "OK"
 }
@@ -411,14 +453,9 @@ function Eliminar-Usuario {
         }
     }
 
+    # Revocar todas las entradas ACL del usuario en carpetas compartidas
     foreach ($ruta in @($CARPETA_GENERAL, "$RAIZ_GRUPOS\reprobados", "$RAIZ_GRUPOS\recursadores")) {
-        if (Test-Path $ruta) {
-            $acl = Get-Acl $ruta
-            $acl.Access | Where-Object { $_.IdentityReference -like "*\$usuario" } | ForEach-Object {
-                $acl.RemoveAccessRule($_) | Out-Null
-            }
-            Set-Acl -Path $ruta -AclObject $acl
-        }
+        Revocar-Permiso -Ruta $ruta -Usuario $usuario
     }
 
     Remove-LocalUser -Name $usuario
