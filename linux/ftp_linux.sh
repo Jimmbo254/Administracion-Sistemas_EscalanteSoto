@@ -416,14 +416,26 @@ cambiar_grupo() {
 
     local raiz_chroot="$RAIZ_USUARIOS/$usuario"
 
-    # Revocar ACL en grupo anterior
+    # Revocar ACLs (entrada y defecto) en grupo anterior
     setfacl -x "u:$usuario" "$RAIZ_GRUPOS/$grupo_actual" 2>/dev/null
+    setfacl -x "d:u:$usuario" "$RAIZ_GRUPOS/$grupo_actual" 2>/dev/null
 
-    # Asignar ACL en grupo nuevo
+    # Asignar ACLs en grupo nuevo
     setfacl -m "u:$usuario:rwx" "$RAIZ_GRUPOS/$grupo_nuevo"
     setfacl -d -m "u:$usuario:rwx" "$RAIZ_GRUPOS/$grupo_nuevo"
 
-    # Actualizar estructura de directorios del chroot
+    # FIX: refrescar bind mount de general y re-aplicar sus ACLs.
+    # El mount puede quedar inconsistente tras las operaciones anteriores;
+    # desmontarlo y remontarlo garantiza que el kernel resuelva bien los
+    # permisos ACL. Se re-aplican entrada y defecto para asegurar escritura.
+    umount "$raiz_chroot/general" 2>/dev/null
+    mkdir -p "$raiz_chroot/general"
+    mount --bind "$CARPETA_GENERAL" "$raiz_chroot/general" 2>/dev/null || \
+        ln -sfn "$CARPETA_GENERAL" "$raiz_chroot/general"
+    setfacl -m "u:$usuario:rwx" "$CARPETA_GENERAL"
+    setfacl -d -m "u:$usuario:rwx" "$CARPETA_GENERAL"
+
+    # Actualizar directorio de grupo en el chroot
     umount "$raiz_chroot/$grupo_actual" 2>/dev/null
     rm -rf "$raiz_chroot/$grupo_actual"
     mkdir -p "$raiz_chroot/$grupo_nuevo"
@@ -464,10 +476,13 @@ eliminar_usuario() {
     umount "$RAIZ_USUARIOS/$usuario/reprobados"    2>/dev/null
     umount "$RAIZ_USUARIOS/$usuario/recursadores"  2>/dev/null
 
-    # Revocar ACLs en carpetas compartidas
+    # Revocar ACLs (entrada y defecto) en carpetas compartidas
     setfacl -x "u:$usuario" "$CARPETA_GENERAL"              2>/dev/null
+    setfacl -x "d:u:$usuario" "$CARPETA_GENERAL"            2>/dev/null
     setfacl -x "u:$usuario" "$RAIZ_GRUPOS/reprobados"       2>/dev/null
+    setfacl -x "d:u:$usuario" "$RAIZ_GRUPOS/reprobados"     2>/dev/null
     setfacl -x "u:$usuario" "$RAIZ_GRUPOS/recursadores"     2>/dev/null
+    setfacl -x "d:u:$usuario" "$RAIZ_GRUPOS/recursadores"   2>/dev/null
 
     # Quitar de la lista blanca de vsftpd
     sed -i "/^$usuario$/d" "$LISTA_USUARIOS"
@@ -535,10 +550,6 @@ while true; do
             exit 0
             ;;
         *)
-            echo "Opción no reconocida. Intenta de nuevo."
-            ;;
-    esac
-done
             echo "Opción no reconocida. Intenta de nuevo."
             ;;
     esac
