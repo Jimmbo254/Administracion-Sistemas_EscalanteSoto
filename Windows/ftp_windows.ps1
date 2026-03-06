@@ -141,9 +141,11 @@ function Instalar-Entorno {
         }
     }
 
-    # FIX: Modify en lugar de ReadAndExecute para que usuarios autenticados
-    # puedan escribir en general. IIS hereda este permiso base sobre la carpeta.
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Usuarios" -Permiso "Modify"
+    # BUILTIN\Usuarios solo lectura en general: el Modify se asigna
+    # individualmente a cada usuario al crearlo via Asignar-PermisosGeneral.
+    # IIS_IUSRS (cuenta del anonimo) tambien solo lectura.
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Usuarios"  -Permiso "ReadAndExecute"
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\IIS_IUSRS" -Permiso "ReadAndExecute"
     Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "BUILTIN\IIS_IUSRS" -Permiso "ReadAndExecute"
 
     $junctionPath = "$CARPETA_ANONIMO\general"
@@ -196,6 +198,14 @@ function Instalar-Entorno {
         users       = "*"
         roles       = ""
         permissions = "Read,Write"
+    } -PSPath "IIS:\" -Location "$SITIO_FTP"
+
+    # Denegar escritura explicitamente al anonimo (anula la regla Allow Write de arriba)
+    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
+        accessType  = "Deny"
+        users       = ""
+        roles       = ""
+        permissions = "Write"
     } -PSPath "IIS:\" -Location "$SITIO_FTP"
 
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.userIsolation.mode -Value "IsolateAllDirectories"
