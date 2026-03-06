@@ -186,6 +186,21 @@ function Instalar-Entorno {
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
 
+    # Limpiar reglas previas para evitar duplicados al re-ejecutar el script
+    Set-WebConfiguration "/system.ftpServer/security/authorization" -PSPath "IIS:\" -Metadata overrideMode -Value Allow
+    Clear-WebConfiguration "/system.ftpServer/security/authorization" -PSPath "IIS:\" -Location "$SITIO_FTP"
+
+    # Orden critico: IIS FTP evalua de arriba hacia abajo y se detiene en la primera coincidencia.
+    # 1. Denegar escritura al anonimo (users vacio = anonimo). Va primero porque
+    #    de lo contrario el Allow de los grupos lo sobreescribiria al coincidir con *.
+    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
+        accessType  = "Deny"
+        users       = ""
+        roles       = ""
+        permissions = "Write"
+    } -PSPath "IIS:\" -Location "$SITIO_FTP"
+
+    # 2. Permitir lectura al anonimo
     Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
         accessType  = "Allow"
         users       = ""
@@ -193,19 +208,13 @@ function Instalar-Entorno {
         permissions = "Read"
     } -PSPath "IIS:\" -Location "$SITIO_FTP"
 
+    # 3. Permitir lectura y escritura a usuarios autenticados por grupo.
+    #    Se usan roles en lugar de * para que el anonimo no coincida con esta regla.
     Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
         accessType  = "Allow"
-        users       = "*"
-        roles       = ""
-        permissions = "Read,Write"
-    } -PSPath "IIS:\" -Location "$SITIO_FTP"
-
-    # Denegar escritura explicitamente al anonimo (anula la regla Allow Write de arriba)
-    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{
-        accessType  = "Deny"
         users       = ""
-        roles       = ""
-        permissions = "Write"
+        roles       = "reprobados,recursadores"
+        permissions = "Read,Write"
     } -PSPath "IIS:\" -Location "$SITIO_FTP"
 
     Set-ItemProperty "IIS:\Sites\$SITIO_FTP" -Name ftpServer.userIsolation.mode -Value "IsolateAllDirectories"
