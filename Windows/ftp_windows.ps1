@@ -48,11 +48,6 @@ function Validar-Contrasena {
     return $true
 }
 
-# FIX: se cambio SetAccessRule por AddAccessRule para que no reemplace
-# entradas existentes del mismo usuario, sino que las acumule correctamente.
-# SetAccessRule reemplazaba la regla si ya existia una para ese usuario,
-# lo que causaba que permisos previos (como los de general) se perdieran
-# o quedaran en estado inconsistente tras operaciones sucesivas.
 function Asignar-Permiso {
     param(
         [string]$Ruta,
@@ -66,7 +61,6 @@ function Asignar-Permiso {
         $regla  = New-Object System.Security.AccessControl.FileSystemAccessRule(
             $cuenta, $Permiso, "ContainerInherit,ObjectInherit", "None", $Tipo
         )
-        # AddAccessRule agrega la regla sin eliminar entradas previas del usuario
         $acl.AddAccessRule($regla)
         Set-Acl -Path $Ruta -AclObject $acl
     } catch {
@@ -74,8 +68,6 @@ function Asignar-Permiso {
     }
 }
 
-# Elimina todas las reglas explicitas de un usuario sobre una ruta.
-# Se usa al cambiar de grupo y al eliminar usuario para limpiar ACLs huerfanas.
 function Revocar-Permiso {
     param(
         [string]$Ruta,
@@ -90,6 +82,25 @@ function Revocar-Permiso {
         Set-Acl -Path $Ruta -AclObject $acl
     } catch {
         Registrar "Advertencia al revocar permiso en '$Ruta' para '$Usuario': $_" "INFO"
+    }
+}
+
+# Aplica permisos Modify sobre la carpeta general para un usuario:
+# - Sobre el destino real ($CARPETA_GENERAL)
+# - Sobre la junction dentro del chroot del usuario
+# IIS evalua permisos en ambos puntos, por eso se necesitan los dos.
+function Asignar-PermisosGeneral {
+    param(
+        [string]$Usuario,
+        [string]$RaizChroot
+    )
+    # Permiso sobre el destino real
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
+
+    # Permiso sobre la junction misma dentro del chroot
+    $junctionGeneral = "$RaizChroot\general"
+    if (Test-Path $junctionGeneral) {
+        Asignar-Permiso -Ruta $junctionGeneral -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
     }
 }
 
@@ -130,7 +141,9 @@ function Instalar-Entorno {
         }
     }
 
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Usuarios" -Permiso "ReadAndExecute"
+    # FIX: Modify en lugar de ReadAndExecute para que usuarios autenticados
+    # puedan escribir en general. IIS hereda este permiso base sobre la carpeta.
+    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "BUILTIN\Usuarios" -Permiso "Modify"
     Asignar-Permiso -Ruta $CARPETA_ANONIMO -Identidad "BUILTIN\IIS_IUSRS" -Permiso "ReadAndExecute"
 
     $junctionPath = "$CARPETA_ANONIMO\general"
@@ -232,15 +245,15 @@ function Crear-Usuario {
 
     Asignar-Permiso -Ruta "$raiz_chroot\$Usuario" -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
 
-    # Crear junction de general y asignar permiso Modify sobre el destino real
+    # Junction de general: permisos sobre destino real Y sobre la junction
     $junctionGeneral = "$raiz_chroot\general"
     if (Test-Path $junctionGeneral) {
         cmd /c "rmdir `"$junctionGeneral`"" | Out-Null
     }
     cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$Usuario" -Permiso "Modify"
+    Asignar-PermisosGeneral -Usuario $Usuario -RaizChroot $raiz_chroot
 
-    # Crear junction de grupo y asignar permiso Modify sobre el destino real
+    # Junction de grupo: permisos sobre destino real
     $junctionGrupo = "$raiz_chroot\$Grupo"
     if (Test-Path $junctionGrupo) {
         cmd /c "rmdir `"$junctionGrupo`"" | Out-Null
@@ -410,18 +423,15 @@ function Cambiar-Grupo {
     cmd /c "rmdir `"$junctionNuevo`"" | Out-Null
     cmd /c "mklink /J `"$junctionNuevo`" `"$RAIZ_GRUPOS\$grupo_nuevo`"" | Out-Null
 
-    # FIX: re-crear junction de general y re-aplicar su permiso Modify.
-    # En Windows los permisos NTFS se aplican sobre el destino real de la
-    # junction, no sobre ella misma. Si AddAccessRule acumulo entradas
-    # inconsistentes en operaciones previas, limpiarlas y reaplicarlas
-    # garantiza que el usuario pueda escribir en general tras el cambio.
+    # FIX: re-crear junction de general y re-aplicar permisos sobre destino
+    # real Y sobre la junction misma. IIS evalua permisos en ambos puntos.
     $junctionGeneral = "$raiz_chroot\general"
     if (Test-Path $junctionGeneral) {
         cmd /c "rmdir `"$junctionGeneral`"" | Out-Null
     }
     cmd /c "mklink /J `"$junctionGeneral`" `"$CARPETA_GENERAL`"" | Out-Null
     Revocar-Permiso -Ruta $CARPETA_GENERAL -Usuario $usuario
-    Asignar-Permiso -Ruta $CARPETA_GENERAL -Identidad "$env:COMPUTERNAME\$usuario" -Permiso "Modify"
+    Asignar-PermisosGeneral -Usuario $usuario -RaizChroot $raiz_chroot
 
     Registrar "Usuario '$usuario' movido de '$grupo_actual' a '$grupo_nuevo'." "OK"
 }
