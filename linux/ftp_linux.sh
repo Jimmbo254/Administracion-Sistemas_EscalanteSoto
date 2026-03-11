@@ -39,21 +39,25 @@ EOF
     sudo groupadd -f recursadores
     sudo groupadd -f grupo-ftp
 
+    # Anonymous: solo lectura, sin escritura
     sudo chown ftp:ftp /srv/ftp/anonymous
     sudo chmod 555 /srv/ftp/anonymous
 
+    # Publico: grupo-ftp puede leer/escribir/crear/borrar archivos
     sudo chown root:grupo-ftp /srv/ftp/publico
-    sudo chmod 1777 /srv/ftp/publico
+    sudo chmod 1775 /srv/ftp/publico
     sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
     sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
     sudo setfacl -R -m u:ftp:rx /srv/ftp/publico
     sudo setfacl -R -d -m u:ftp:rx /srv/ftp/publico
 
+    # Reprobados: solo su grupo puede leer/escribir
     sudo chown root:reprobados /srv/ftp/grupos/reprobados
     sudo chmod 1775 /srv/ftp/grupos/reprobados
     sudo setfacl -R -m g:reprobados:rwx /srv/ftp/grupos/reprobados
     sudo setfacl -R -d -m g:reprobados:rwx /srv/ftp/grupos/reprobados
 
+    # Recursadores: solo su grupo puede leer/escribir
     sudo chown root:recursadores /srv/ftp/grupos/recursadores
     sudo chmod 1775 /srv/ftp/grupos/recursadores
     sudo setfacl -R -m g:recursadores:rwx /srv/ftp/grupos/recursadores
@@ -96,17 +100,29 @@ establecer_puntos_montaje() {
     sudo mount --bind /srv/ftp/publico "$home_dir/general"
     sudo mount --bind /srv/ftp/grupos/$grupo "$home_dir/$grupo"
 
+    # Home: root es dueño con sticky bit
+    # El sticky bit evita que el usuario renombre o borre las carpetas general/$grupo/$usuario
     sudo chown root:root "$home_dir"
-    sudo chmod 555 "$home_dir"
+    sudo chmod 1755 "$home_dir"
 
+    # Carpeta general: el bind mount hereda permisos de /srv/ftp/publico
+    # Solo necesitamos que el punto de montaje sea accesible
     sudo chown root:root "$home_dir/general"
-    sudo chmod 555 "$home_dir/general"
+    sudo chmod 755 "$home_dir/general"
 
+    # Carpeta de grupo: igual, hereda del bind mount
     sudo chown root:root "$home_dir/$grupo"
-    sudo chmod 555 "$home_dir/$grupo"
+    sudo chmod 755 "$home_dir/$grupo"
 
+    # Carpeta personal del usuario: solo el usuario
     sudo chown "$usuario:$usuario" "$home_dir/$usuario"
     sudo chmod 700 "$home_dir/$usuario"
+
+    # ACL explícita para que el usuario pueda operar dentro de general y su grupo
+    sudo setfacl -m u:"$usuario":rwx "$home_dir/general"
+    sudo setfacl -d -m u:"$usuario":rwx "$home_dir/general"
+    sudo setfacl -m u:"$usuario":rwx "$home_dir/$grupo"
+    sudo setfacl -d -m u:"$usuario":rwx "$home_dir/$grupo"
 }
 
 dar_alta_usuario() {
@@ -174,6 +190,7 @@ mover_usuario_grupo() {
         echo "/srv/ftp/grupos/$n_group /home/$user/$n_group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
 
+    # Re-aplicar montajes y permisos con el nuevo grupo
     establecer_puntos_montaje "$user" "$n_group"
     echo -e "${C_EXITO}  OK  '$user' movido a '$n_group' sin problemas.${C_RESET}"
 }
