@@ -37,6 +37,29 @@ function Set-FolderACL {
     try { Set-Acl -Path $Path -AclObject $acl -ErrorAction Stop } catch { }
 }
 
+# Bloquea renombrado/borrado de una carpeta para un usuario específico
+# Modify incluye Delete y WriteAttributes, así que agregamos reglas Deny explícitas
+function Protect-JunctionFolder {
+    param([string]$Path, [string]$Username)
+    try {
+        $resolved = New-Object System.Security.Principal.NTAccount("$env:COMPUTERNAME\$Username")
+        $resolved.Translate([System.Security.Principal.SecurityIdentifier]) | Out-Null
+
+        $acl = Get-Acl -Path $Path
+
+        # Deny: borrar esta carpeta y renombrarla (WriteAttributes + Delete en este objeto, sin herencia)
+        $denyDelete = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $resolved,
+            [System.Security.AccessControl.FileSystemRights]"Delete,WriteAttributes",
+            "None", "None", "Deny"
+        )
+        $acl.AddAccessRule($denyDelete)
+        Set-Acl -Path $Path -AclObject $acl -ErrorAction Stop
+    } catch {
+        Escribir-Info "No se pudo proteger '$Path': $_"
+    }
+}
+
 function Set-FtpAuthRules {
     param([string]$SiteName, [array]$Rules, [string]$Location = "")
     $configPath = "$env:SystemRoot\System32\inetsrv\config\applicationHost.config"
@@ -202,19 +225,28 @@ function Opcion-Crear-Usuarios {
         $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
         New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
+
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
             @{ Identity = $USERNAME; Rights = "Modify" }
         )
+        # El usuario puede entrar y ver su carpeta raíz pero no renombrarla
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "Modify" }
+            @{ Identity = $USERNAME; Rights = "ReadAndExecute" }
         )
+
         cmd /c "mklink /J `"$USER_FTP_DIR\general`" `"$FTP_ROOT\general`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$GRUPO`" `"$FTP_ROOT\$GRUPO`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$USERNAME`" `"$FTP_ROOT\personal\$USERNAME`"" | Out-Null
+
+        # Proteger las 3 junctions: el usuario no puede borrarlas ni renombrarlas
+        foreach ($junction in @("general", $GRUPO, $USERNAME)) {
+            Protect-JunctionFolder -Path "$USER_FTP_DIR\$junction" -Username $USERNAME
+        }
+
         Escribir-Exito "Usuario '$USERNAME' creado en grupo '$GRUPO'."
     }
     Read-Host "Presiona Enter para continuar"
@@ -242,10 +274,16 @@ function Opcion-Cambiar-Grupo {
     }
     Remove-LocalGroupMember -Group $GRUPO_ACTUAL -Member $USERNAME -ErrorAction SilentlyContinue
     Add-LocalGroupMember -Group $NUEVO_GRUPO -Member $USERNAME -ErrorAction SilentlyContinue
+
     $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
     $oldJunction = "$USER_FTP_DIR\$GRUPO_ACTUAL"
     if (Test-Path $oldJunction) { cmd /c "rmdir `"$oldJunction`"" | Out-Null }
+
     cmd /c "mklink /J `"$USER_FTP_DIR\$NUEVO_GRUPO`" `"$FTP_ROOT\$NUEVO_GRUPO`"" | Out-Null
+
+    # Re-aplicar protección a la nueva junction
+    Protect-JunctionFolder -Path "$USER_FTP_DIR\$NUEVO_GRUPO" -Username $USERNAME
+
     Escribir-Exito "Usuario '$USERNAME' movido de '$GRUPO_ACTUAL' a '$NUEVO_GRUPO'."
     Read-Host "Presiona Enter para continuar"
 }
