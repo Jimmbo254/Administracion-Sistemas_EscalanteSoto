@@ -231,11 +231,10 @@ function Opcion-Crear-Usuarios {
             @{ Identity = "Administrators"; Rights = "FullControl" },
             @{ Identity = $USERNAME; Rights = "Modify" }
         )
-        # El usuario puede entrar y ver su carpeta raíz pero no renombrarla
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "ReadAndExecute" }
+            @{ Identity = $USERNAME; Rights = "Modify" }
         )
 
         cmd /c "mklink /J `"$USER_FTP_DIR\general`" `"$FTP_ROOT\general`"" | Out-Null
