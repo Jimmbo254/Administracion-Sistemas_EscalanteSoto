@@ -1,556 +1,300 @@
 #!/bin/bash
 
-# Servidor FTP - Fedora
+C_ERROR='\033[1;31m'
+C_EXITO='\033[0;32m'
+C_INFO='\033[0;33m'
+C_TITULO='\033[1;35m'
+C_RESET='\033[0m'
+C_DIM='\033[2m'
 
-VERDE='\033[0;32m'
-ROJO='\033[0;31m'
-NORMAL='\033[0m'
+preparar_entorno_ftp() {
+    echo -e "${C_INFO}  >> Iniciando configuracion de VSFTPD...${C_RESET}"
+    sudo dnf install -y vsftpd util-linux acl &>/dev/null
 
-ARCHIVO_LOG='/var/log/gestion_ftp.log'
-
-# Rutas Base
-RAIZ_FTP="/srv/ftp"
-RAIZ_USUARIOS="$RAIZ_FTP/usuarios"
-RAIZ_GRUPOS="$RAIZ_FTP/grupos"
-CARPETA_GENERAL="$RAIZ_FTP/general"
-CARPETA_ANONIMO="$RAIZ_FTP/anonimo"
-CONF_VSFTPD="/etc/vsftpd/vsftpd.conf"
-LISTA_USUARIOS="/etc/vsftpd/user_list"
-
-# ============== FUNCIONES ==============
-
-# Registra un mensaje en el log y lo muestra en pantalla
-registrar() {
-    local mensaje="$1"
-    local tipo="${2:-INFO}"
-    local fecha
-    fecha=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$fecha] [$tipo] $mensaje" >> "$ARCHIVO_LOG"
-
-    if [[ "$tipo" == "OK" ]]; then
-        echo -e "${VERDE}[$tipo] $mensaje${NORMAL}"
-    elif [[ "$tipo" == "ERROR" ]]; then
-        echo -e "${ROJO}[$tipo] $mensaje${NORMAL}"
-    else
-        echo "[$tipo] $mensaje"
-    fi
-}
-
-# Verifica que el script corra como root
-verificar_root() {
-    if [[ $EUID -ne 0 ]]; then
-        echo -e "${ROJO}[ERROR] Necesitas ejecutar este script con privilegios de root (sudo).${NORMAL}"
-        exit 1
-    fi
-}
-
-# Valida que la contraseña cumpla requisitos de seguridad:
-# - Entre 8 y 15 caracteres
-# - Al menos una mayúscula, una minúscula, un número y un carácter especial
-validar_contrasena() {
-    local contrasena="$1"
-    local longitud=${#contrasena}
-
-    if [[ $longitud -lt 8 || $longitud -gt 15 ]]; then
-        return 1
-    fi
-    if ! echo "$contrasena" | grep -q '[A-Z]'; then return 1; fi
-    if ! echo "$contrasena" | grep -q '[a-z]'; then return 1; fi
-    if ! echo "$contrasena" | grep -q '[0-9]'; then return 1; fi
-    if ! echo "$contrasena" | grep -q '[^a-zA-Z0-9]'; then return 1; fi
-    return 0
-}
-
-# Instala vsftpd si no está presente, crea la estructura de
-# directorios, configura vsftpd.conf, ajusta firewall y SELinux.
-# Es seguro ejecutarlo varias veces (idempotente).
-instalar_entorno() {
-    registrar "Verificando instalación de vsftpd..." "INFO"
-
-    # Instalar vsftpd solo si no está instalado
-    if ! rpm -q vsftpd &>/dev/null; then
-        dnf install -y vsftpd &>/dev/null
-        registrar "vsftpd instalado correctamente." "OK"
-    else
-        registrar "vsftpd ya estaba instalado, no se reinstala." "INFO"
-    fi
-
-    # Instalar acl para manejo de permisos extendidos
-    if ! rpm -q acl &>/dev/null; then
-        dnf install -y acl &>/dev/null
-        registrar "Paquete acl instalado." "OK"
-    fi
-
-    # Crear estructura base de directorios
-    local directorios=(
-        "$CARPETA_GENERAL"
-        "$CARPETA_ANONIMO/general"
-        "$RAIZ_USUARIOS"
-        "$RAIZ_GRUPOS/reprobados"
-        "$RAIZ_GRUPOS/recursadores"
-    )
-    for dir in "${directorios[@]}"; do
-        if [[ ! -d "$dir" ]]; then
-            mkdir -p "$dir"
-            registrar "Directorio creado: $dir" "INFO"
-        fi
-    done
-
-    # Crear grupos del sistema si no existen
-    for grupo in reprobados recursadores; do
-        if ! getent group "$grupo" &>/dev/null; then
-            groupadd "$grupo"
-            registrar "Grupo del sistema '$grupo' creado." "OK"
-        fi
-    done
-
-    # Permitir /sbin/nologin como shell válido para usuarios FTP
-    if ! grep -q "^/sbin/nologin$" /etc/shells; then
-        echo "/sbin/nologin" >> /etc/shells
-        registrar "Shell /sbin/nologin agregado a /etc/shells." "OK"
-    fi
-
-    # Crear directorio requerido por vsftpd para chroot
-    mkdir -p /var/run/vsftpd/empty
-
-    # Permisos carpeta general: root la posee, accesible para todos
-    chown root:root "$CARPETA_GENERAL"
-    chmod 755 "$CARPETA_GENERAL"
-
-    # Bind mount de general en carpeta del anonimo (carpeta compartida)
-    if ! mountpoint -q "$CARPETA_ANONIMO/general"; then
-        mount --bind "$CARPETA_GENERAL" "$CARPETA_ANONIMO/general"
-        registrar "Bind mount de general en anonimo realizado." "OK"
-    fi
-
-    # Permisos carpeta anonimo
-    chown root:root "$CARPETA_ANONIMO"
-    chmod 755 "$CARPETA_ANONIMO"
-
-    # Permisos carpetas de grupo: el grupo tiene escritura
-    for grupo in reprobados recursadores; do
-        chown root:"$grupo" "$RAIZ_GRUPOS/$grupo"
-        chmod 775 "$RAIZ_GRUPOS/$grupo"
-    done
-
-    # Permisos carpeta usuarios: accesible para vsftpd
-    chown root:root "$RAIZ_USUARIOS"
-    chmod 755 "$RAIZ_USUARIOS"
-
-    # Carpeta grupos: no accesible para otros
-    chmod 750 "$RAIZ_GRUPOS"
-
-    # Generar archivo vsftpd.conf
-    cp "$CONF_VSFTPD" "${CONF_VSFTPD}.respaldo" 2>/dev/null
-    cat > "$CONF_VSFTPD" << 'FINCONF'
-# -------------------------------------------------------
-# Configuración vsftpd - Servidor FTP Fedora
-# -------------------------------------------------------
-
-# Modo de escucha
-listen=YES
-listen_ipv6=NO
-
-# Acceso de usuarios
+    cat <<EOF | sudo tee /etc/vsftpd/vsftpd.conf > /dev/null
 anonymous_enable=YES
 local_enable=YES
 write_enable=YES
-local_umask=022
-
-# Opciones de acceso anónimo (solo lectura en /anonimo/general)
-anon_root=/srv/ftp/anonimo
-no_anon_password=YES
-anon_upload_enable=NO
-anon_mkdir_write_enable=NO
-anon_other_write_enable=NO
-anon_world_readable_only=YES
-
-# Registro de transferencias
-xferlog_enable=YES
-xferlog_std_format=YES
-use_localtime=YES
-dirmessage_enable=YES
-connect_from_port_20=YES
-
-# Jaula chroot: cada usuario queda encerrado en su directorio
+local_umask=002
 chroot_local_user=YES
 allow_writeable_chroot=YES
-secure_chroot_dir=/var/run/vsftpd/empty
-
-# Autenticación PAM
+check_shell=NO
+anon_root=/srv/ftp/anonymous
+no_anon_password=YES
+anon_world_readable_only=YES
+anon_mkdir_write_enable=NO
+anon_upload_enable=NO
+anon_other_write_enable=NO
+pasv_enable=YES
+pasv_min_port=40000
+pasv_max_port=40010
+listen=NO
+listen_ipv6=YES
 pam_service_name=vsftpd
+EOF
 
-# Lista blanca de usuarios permitidos
-userlist_enable=YES
-userlist_deny=NO
-userlist_file=/etc/vsftpd/user_list
+    sudo mkdir -p /srv/ftp/{grupos/reprobados,grupos/recursadores,publico,anonymous/general}
 
-# Directorio raíz por usuario (se resuelve dinámicamente)
-user_sub_token=%u
-local_root=/srv/ftp/usuarios/%u
-FINCONF
+    sudo groupadd -f reprobados
+    sudo groupadd -f recursadores
+    sudo groupadd -f grupo-ftp
 
-    # Crear lista de usuarios si no existe, agregar ftp y anonymous
-    touch "$LISTA_USUARIOS"
-    for anonimo in ftp anonymous; do
-        if ! grep -q "^$anonimo$" "$LISTA_USUARIOS" 2>/dev/null; then
-            echo "$anonimo" >> "$LISTA_USUARIOS"
-        fi
-    done
+    sudo chown ftp:ftp /srv/ftp/anonymous
+    sudo chmod 555 /srv/ftp/anonymous
 
-    # Abrir puerto FTP en el firewall
-    if command -v firewall-cmd &>/dev/null; then
-        firewall-cmd --permanent --add-service=ftp &>/dev/null
-        firewall-cmd --reload &>/dev/null
-        registrar "Puerto 21 habilitado en firewall." "OK"
+    sudo chown root:grupo-ftp /srv/ftp/publico
+    sudo chmod 1777 /srv/ftp/publico
+    sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
+    sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
+    sudo setfacl -R -m u:ftp:rx /srv/ftp/publico
+    sudo setfacl -R -d -m u:ftp:rx /srv/ftp/publico
+
+    sudo chown root:reprobados /srv/ftp/grupos/reprobados
+    sudo chmod 1775 /srv/ftp/grupos/reprobados
+    sudo setfacl -R -m g:reprobados:rwx /srv/ftp/grupos/reprobados
+    sudo setfacl -R -d -m g:reprobados:rwx /srv/ftp/grupos/reprobados
+
+    sudo chown root:recursadores /srv/ftp/grupos/recursadores
+    sudo chmod 1775 /srv/ftp/grupos/recursadores
+    sudo setfacl -R -m g:recursadores:rwx /srv/ftp/grupos/recursadores
+    sudo setfacl -R -d -m g:recursadores:rwx /srv/ftp/grupos/recursadores
+
+    if ! grep -q "^/srv/ftp/publico /srv/ftp/anonymous/general " /etc/fstab; then
+        echo "/srv/ftp/publico /srv/ftp/anonymous/general none bind,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
 
-    # Ajustes SELinux para vsftpd
-    if command -v setsebool &>/dev/null; then
-        setsebool -P ftpd_full_access on &>/dev/null
-        setsebool -P allow_ftpd_full_access on &>/dev/null
-        registrar "SELinux configurado para vsftpd." "OK"
+    sudo mountpoint -q /srv/ftp/anonymous/general || sudo mount /srv/ftp/anonymous/general 2>/dev/null
+    sudo mount -a
+
+    sudo firewall-cmd --permanent --add-service=ftp &>/dev/null
+    sudo firewall-cmd --permanent --add-port=40000-40010/tcp &>/dev/null
+    sudo firewall-cmd --reload &>/dev/null
+
+    sudo setsebool -P ftpd_full_access on &>/dev/null
+    sudo setsebool -P tftp_home_dir on &>/dev/null
+
+    if ! grep -q "/sbin/nologin" /etc/shells; then
+        echo "/sbin/nologin" | sudo tee -a /etc/shells > /dev/null
     fi
 
-    # Habilitar e iniciar el servicio
-    systemctl enable vsftpd &>/dev/null
-    systemctl restart vsftpd
-
-    registrar "Entorno FTP listo y servicio activo." "OK"
+    sudo systemctl restart vsftpd
+    sudo systemctl enable vsftpd &>/dev/null
+    echo -e "${C_EXITO}  OK  Servidor FTP listo y en ejecucion.${C_RESET}"
 }
 
-# Crea el usuario en el sistema, asigna grupo, construye la
-# estructura de directorios dentro de su chroot y aplica ACLs.
-# Parámetros: $1=nombre_usuario  $2=contrasena  $3=grupo
-crear_usuario() {
-    local usuario="$1"
-    local contrasena="$2"
-    local grupo="$3"
+establecer_puntos_montaje() {
+    local usuario=$1
+    local grupo=$2
+    local home_dir="/home/$usuario"
 
-    # Crear usuario del sistema sin shell de login ni directorio home
-    # -d apunta directo al chroot para evitar conflictos con vsftpd
-    useradd -M -s /sbin/nologin -d "/srv/ftp/usuarios/$usuario" "$usuario"
-    echo "$usuario:$contrasena" | chpasswd
-    usermod -aG "$grupo" "$usuario"
+    sudo mkdir -p "$home_dir/general" "$home_dir/$grupo" "$home_dir/$usuario"
 
-    local raiz_chroot="$RAIZ_USUARIOS/$usuario"
-    mkdir -p "$raiz_chroot/$usuario"
-    mkdir -p "$raiz_chroot/general"
-    mkdir -p "$raiz_chroot/$grupo"
+    sudo umount "$home_dir/general" 2>/dev/null
+    sudo umount "$home_dir/reprobados" 2>/dev/null
+    sudo umount "$home_dir/recursadores" 2>/dev/null
 
-    # Raíz del chroot debe ser propiedad de root (requisito vsftpd)
-    chown root:root "$raiz_chroot"
-    chmod 755 "$raiz_chroot"
+    sudo mount --bind /srv/ftp/publico "$home_dir/general"
+    sudo mount --bind /srv/ftp/grupos/$grupo "$home_dir/$grupo"
 
-    # Carpeta personal: solo el usuario tiene acceso total
-    chown "$usuario":"$usuario" "$raiz_chroot/$usuario"
-    chmod 700 "$raiz_chroot/$usuario"
+    sudo chown root:root "$home_dir"
+    sudo chmod 555 "$home_dir"
 
-    # Montar carpeta general dentro del chroot
-    mount --bind "$CARPETA_GENERAL" "$raiz_chroot/general" 2>/dev/null || \
-        ln -sfn "$CARPETA_GENERAL" "$raiz_chroot/general"
+    sudo chown root:root "$home_dir/general"
+    sudo chmod 555 "$home_dir/general"
 
-    # Montar carpeta de grupo dentro del chroot
-    mount --bind "$RAIZ_GRUPOS/$grupo" "$raiz_chroot/$grupo" 2>/dev/null || \
-        ln -sfn "$RAIZ_GRUPOS/$grupo" "$raiz_chroot/$grupo"
+    sudo chown root:root "$home_dir/$grupo"
+    sudo chmod 555 "$home_dir/$grupo"
 
-    # ACLs: usuario autenticado tiene escritura en general y en su grupo
-    setfacl -m "u:$usuario:rwx" "$CARPETA_GENERAL"
-    setfacl -d -m "u:$usuario:rwx" "$CARPETA_GENERAL"
-    setfacl -m "u:$usuario:rwx" "$RAIZ_GRUPOS/$grupo"
-    setfacl -d -m "u:$usuario:rwx" "$RAIZ_GRUPOS/$grupo"
-
-    # Agregar a la lista blanca de vsftpd
-    if ! grep -q "^$usuario$" "$LISTA_USUARIOS"; then
-        echo "$usuario" >> "$LISTA_USUARIOS"
-    fi
-
-    registrar "Usuario '$usuario' creado y asignado al grupo '$grupo'." "OK"
+    sudo chown "$usuario:$usuario" "$home_dir/$usuario"
+    sudo chmod 700 "$home_dir/$usuario"
 }
 
-alta_usuario() {
-    echo ""
-    echo "-- Alta de usuario FTP --"
+dar_alta_usuario() {
+    local user=$1
+    local pass=$2
+    local group=$3
 
-    read -rp "Nombre de usuario: " usuario
-    usuario=$(echo "$usuario" | tr -d '[:space:]')
-
-    if [[ -z "$usuario" ]]; then
-        registrar "El nombre de usuario no puede estar vacío." "ERROR"
-        return
-    fi
-    if id "$usuario" &>/dev/null; then
-        registrar "El usuario '$usuario' ya existe en el sistema." "ERROR"
+    if [[ -z "$user" || -z "$pass" ]]; then
+        echo -e "${C_ERROR}  ERR  Falta usuario o contrasena.${C_RESET}"
         return
     fi
 
-    read -rsp "Contraseña (8-15 chars, mayúscula, minúscula, número, especial): " contrasena
-    echo
-    if ! validar_contrasena "$contrasena"; then
-        registrar "La contraseña no cumple los requisitos de seguridad." "ERROR"
+    if id "$user" &>/dev/null; then
+        echo -e "${C_ERROR}  ERR  El usuario '$user' ya existe en el sistema.${C_RESET}"
         return
     fi
 
-    echo "Grupos disponibles:"
-    echo "  1) reprobados"
-    echo "  2) recursadores"
-    read -rp "Selecciona el grupo del usuario: " opcion_grupo
+    sudo useradd -m -s /sbin/nologin "$user"
+    echo "$user:$pass" | sudo chpasswd
+    sudo usermod -aG grupo-ftp,"$group" "$user"
 
-    case "$opcion_grupo" in
-        1) grupo="reprobados" ;;
-        2) grupo="recursadores" ;;
-        *)
-            registrar "Opción de grupo no válida." "ERROR"
-            return
-            ;;
-    esac
+    establecer_puntos_montaje "$user" "$group"
 
-    crear_usuario "$usuario" "$contrasena" "$grupo"
+    if ! grep -q "^/srv/ftp/publico /home/$user/general " /etc/fstab; then
+        echo "/srv/ftp/publico /home/$user/general none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fi
+    if ! grep -q "^/srv/ftp/grupos/$group /home/$user/$group " /etc/fstab; then
+        echo "/srv/ftp/grupos/$group /home/$user/$group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fi
+
+    echo -e "${C_EXITO}  OK  '$user' registrado en el grupo '$group'.${C_RESET}"
 }
 
-alta_masiva() {
-    echo ""
-    echo "-- Alta masiva de usuarios FTP --"
+mover_usuario_grupo() {
+    local user=$1
+    local n_group=$2
 
-    read -rp "¿Cuántos usuarios deseas registrar? " cantidad
-
-    if ! [[ "$cantidad" =~ ^[0-9]+$ ]] || [[ "$cantidad" -le 0 ]]; then
-        registrar "Cantidad inválida. Ingresa un número entero positivo." "ERROR"
+    if ! id "$user" &>/dev/null; then
+        echo -e "${C_ERROR}  ERR  No se encontro el usuario '$user'.${C_RESET}"
         return
     fi
 
-    local creados=0
-    local omitidos=0
-
-    for (( i=1; i<=cantidad; i++ )); do
-        echo ""
-        echo "-- Usuario $i de $cantidad --"
-
-        read -rp "  Nombre de usuario: " usuario
-        usuario=$(echo "$usuario" | tr -d '[:space:]')
-
-        if [[ -z "$usuario" ]]; then
-            registrar "Nombre vacío, se omite el usuario $i." "ERROR"
-            (( omitidos++ ))
-            continue
-        fi
-        if id "$usuario" &>/dev/null; then
-            registrar "El usuario '$usuario' ya existe, se omite." "ERROR"
-            (( omitidos++ ))
-            continue
-        fi
-
-        read -rsp "  Contraseña: " contrasena
-        echo
-        if ! validar_contrasena "$contrasena"; then
-            registrar "Contraseña inválida para '$usuario', se omite." "ERROR"
-            (( omitidos++ ))
-            continue
-        fi
-
-        echo "  Grupos: 1) reprobados   2) recursadores"
-        read -rp "  Grupo: " opcion_grupo
-
-        case "$opcion_grupo" in
-            1) grupo="reprobados" ;;
-            2) grupo="recursadores" ;;
-            *)
-                registrar "Grupo inválido para '$usuario', se omite." "ERROR"
-                (( omitidos++ ))
-                continue
-                ;;
-        esac
-
-        crear_usuario "$usuario" "$contrasena" "$grupo"
-        (( creados++ ))
-    done
-
-    echo ""
-    registrar "Alta masiva completada. Creados: $creados | Omitidos: $omitidos." "OK"
-}
-
-cambiar_grupo() {
-    echo ""
-    echo "-- Cambio de grupo --"
-
-    read -rp "Nombre de usuario: " usuario
-    usuario=$(echo "$usuario" | tr -d '[:space:]')
-
-    if ! id "$usuario" &>/dev/null; then
-        registrar "El usuario '$usuario' no existe." "ERROR"
-        return
-    fi
-
-    # Detectar grupo FTP actual del usuario
     local grupo_actual=""
-    for g in reprobados recursadores; do
-        if id -nG "$usuario" | grep -qw "$g"; then
-            grupo_actual="$g"
-            break
-        fi
-    done
+    if id -nG "$user" | grep -qw "reprobados"; then grupo_actual="reprobados"; fi
+    if id -nG "$user" | grep -qw "recursadores"; then grupo_actual="recursadores"; fi
 
-    if [[ -z "$grupo_actual" ]]; then
-        registrar "El usuario '$usuario' no pertenece a ningún grupo FTP conocido." "ERROR"
+    if [[ "$grupo_actual" == "$n_group" ]]; then
+        echo -e "${C_ERROR}  ERR  '$user' ya pertenece a $n_group.${C_RESET}"
         return
     fi
 
-    local grupo_nuevo
-    if [[ "$grupo_actual" == "reprobados" ]]; then
-        grupo_nuevo="recursadores"
-    else
-        grupo_nuevo="reprobados"
+    if [[ -n "$grupo_actual" ]]; then
+        sudo gpasswd -d "$user" "$grupo_actual" &>/dev/null
+    fi
+    sudo usermod -aG "$n_group" "$user"
+
+    sudo umount "/home/$user/reprobados" 2>/dev/null
+    sudo umount "/home/$user/recursadores" 2>/dev/null
+    sudo rm -rf "/home/$user/reprobados" "/home/$user/recursadores"
+
+    sudo sed -i "\|/home/$user/reprobados|d" /etc/fstab
+    sudo sed -i "\|/home/$user/recursadores|d" /etc/fstab
+
+    if ! grep -q "^/srv/ftp/grupos/$n_group /home/$user/$n_group " /etc/fstab; then
+        echo "/srv/ftp/grupos/$n_group /home/$user/$n_group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
 
-    echo "El usuario '$usuario' pertenece actualmente a: $grupo_actual"
-    read -rp "¿Moverlo a '$grupo_nuevo'? (s/N): " confirmacion
-
-    if [[ ! "$confirmacion" =~ ^[Ss]$ ]]; then
-        registrar "Cambio de grupo cancelado por el usuario." "INFO"
-        return
-    fi
-
-    # Quitar del grupo anterior y agregar al nuevo
-    gpasswd -d "$usuario" "$grupo_actual" &>/dev/null
-    usermod -aG "$grupo_nuevo" "$usuario"
-
-    local raiz_chroot="$RAIZ_USUARIOS/$usuario"
-
-    # Revocar ACLs (entrada y defecto) en grupo anterior
-    setfacl -x "u:$usuario" "$RAIZ_GRUPOS/$grupo_actual" 2>/dev/null
-    setfacl -x "d:u:$usuario" "$RAIZ_GRUPOS/$grupo_actual" 2>/dev/null
-
-    # Asignar ACLs en grupo nuevo
-    setfacl -m "u:$usuario:rwx" "$RAIZ_GRUPOS/$grupo_nuevo"
-    setfacl -d -m "u:$usuario:rwx" "$RAIZ_GRUPOS/$grupo_nuevo"
-
-    # FIX: refrescar bind mount de general y re-aplicar sus ACLs.
-    # El mount puede quedar inconsistente tras las operaciones anteriores;
-    # desmontarlo y remontarlo garantiza que el kernel resuelva bien los
-    # permisos ACL. Se re-aplican entrada y defecto para asegurar escritura.
-    umount "$raiz_chroot/general" 2>/dev/null
-    mkdir -p "$raiz_chroot/general"
-    mount --bind "$CARPETA_GENERAL" "$raiz_chroot/general" 2>/dev/null || \
-        ln -sfn "$CARPETA_GENERAL" "$raiz_chroot/general"
-    setfacl -m "u:$usuario:rwx" "$CARPETA_GENERAL"
-    setfacl -d -m "u:$usuario:rwx" "$CARPETA_GENERAL"
-
-    # Actualizar directorio de grupo en el chroot
-    umount "$raiz_chroot/$grupo_actual" 2>/dev/null
-    rm -rf "$raiz_chroot/$grupo_actual"
-    mkdir -p "$raiz_chroot/$grupo_nuevo"
-
-    mount --bind "$RAIZ_GRUPOS/$grupo_nuevo" "$raiz_chroot/$grupo_nuevo" 2>/dev/null || \
-        ln -sfn "$RAIZ_GRUPOS/$grupo_nuevo" "$raiz_chroot/$grupo_nuevo"
-
-    # Mantener permisos correctos en la raíz del chroot
-    chown root:root "$raiz_chroot"
-    chmod 755 "$raiz_chroot"
-
-    registrar "Usuario '$usuario' movido de '$grupo_actual' a '$grupo_nuevo'." "OK"
+    establecer_puntos_montaje "$user" "$n_group"
+    echo -e "${C_EXITO}  OK  '$user' movido a '$n_group' sin problemas.${C_RESET}"
 }
 
 eliminar_usuario() {
-    echo ""
-    echo "-- Eliminar usuario FTP --"
+    local user=$1
+    local home_dir="/home/$user"
 
-    read -rp "Nombre de usuario a eliminar: " usuario
-    usuario=$(echo "$usuario" | tr -d '[:space:]')
-
-    if ! id "$usuario" &>/dev/null; then
-        registrar "El usuario '$usuario' no existe en el sistema." "ERROR"
+    if ! id "$user" &>/dev/null; then
+        echo -e "${C_ERROR}  ERR  No se encontro el usuario '$user'.${C_RESET}"
         return
     fi
 
-    echo ""
-    echo -e "${ROJO}ADVERTENCIA: Esta acción elimina al usuario y todos sus archivos. No se puede deshacer.${NORMAL}"
-    read -rp "Escribe el nombre del usuario para confirmar: " confirmacion
+    sudo pkill -u "$user" 2>/dev/null
 
-    if [[ "$confirmacion" != "$usuario" ]]; then
-        registrar "Confirmación incorrecta. No se realizó ningún cambio." "ERROR"
-        return
-    fi
-
-    # Desmontar bind mounts del chroot
-    umount "$RAIZ_USUARIOS/$usuario/general"       2>/dev/null
-    umount "$RAIZ_USUARIOS/$usuario/reprobados"    2>/dev/null
-    umount "$RAIZ_USUARIOS/$usuario/recursadores"  2>/dev/null
-
-    # Revocar ACLs (entrada y defecto) en carpetas compartidas
-    setfacl -x "u:$usuario" "$CARPETA_GENERAL"              2>/dev/null
-    setfacl -x "d:u:$usuario" "$CARPETA_GENERAL"            2>/dev/null
-    setfacl -x "u:$usuario" "$RAIZ_GRUPOS/reprobados"       2>/dev/null
-    setfacl -x "d:u:$usuario" "$RAIZ_GRUPOS/reprobados"     2>/dev/null
-    setfacl -x "u:$usuario" "$RAIZ_GRUPOS/recursadores"     2>/dev/null
-    setfacl -x "d:u:$usuario" "$RAIZ_GRUPOS/recursadores"   2>/dev/null
-
-    # Quitar de la lista blanca de vsftpd
-    sed -i "/^$usuario$/d" "$LISTA_USUARIOS"
-
-    # Eliminar usuario del sistema y su directorio chroot
-    userdel "$usuario" 2>/dev/null
-    rm -rf "$RAIZ_USUARIOS/$usuario"
-
-    registrar "Usuario '$usuario' eliminado correctamente." "OK"
-}
-
-listar_usuarios() {
-    echo ""
-    echo "-- Usuarios FTP registrados por grupo --"
-
-    for grupo in reprobados recursadores; do
-        echo ""
-        echo "Grupo: $grupo"
-        local miembros
-        miembros=$(getent group "$grupo" | cut -d: -f4 | tr ',' '\n')
-
-        if [[ -z "$miembros" ]]; then
-            echo "  (sin usuarios asignados)"
-        else
-            while IFS= read -r miembro; do
-                echo "  -> $miembro"
-            done <<< "$miembros"
+    for punto in "$home_dir/general" "$home_dir/reprobados" "$home_dir/recursadores"; do
+        if mountpoint -q "$punto"; then
+            sudo umount "$punto" 2>/dev/null || sudo umount -l "$punto" 2>/dev/null
         fi
     done
-    echo ""
+
+    sudo sed -i "\|$home_dir/general|d" /etc/fstab
+    sudo sed -i "\|$home_dir/reprobados|d" /etc/fstab
+    sudo sed -i "\|$home_dir/recursadores|d" /etc/fstab
+
+    sudo userdel -r "$user" &>/dev/null
+
+    if [ -d "$home_dir" ]; then
+        sudo chattr -i "$home_dir" 2>/dev/null
+        sudo rm -rf "$home_dir"
+    fi
+
+    echo -e "${C_EXITO}  OK  '$user' ha sido eliminado del sistema.${C_RESET}"
 }
 
-# ============== MENU ==============
+mostrar_resumen_usuarios() {
+    echo -e "\n${C_TITULO}--- Usuarios registrados en el servidor FTP ---${C_RESET}"
+    printf "${C_INFO}%-20s | %-15s${C_RESET}\n" "USUARIO" "GRUPO"
+    echo -e "${C_DIM}----------------------------------------${C_RESET}"
 
-verificar_root
-instalar_entorno
+    users_list=$(awk -F: '$7=="/sbin/nologin" && $3>=1000 {print $1}' /etc/passwd)
 
-while true; do
-    echo ""
-    echo "========================================="
-    echo "         ADMINISTRADOR FTP - FEDORA      "
-    echo "========================================="
-    echo " 1. Registrar un usuario"
-    echo " 2. Registro masivo de usuarios"
-    echo " 3. Cambiar usuario de grupo"
-    echo " 4. Eliminar usuario"
-    echo " 5. Listar usuarios por grupo"
-    echo " 6. Reiniciar servicio vsftpd"
-    echo " 7. Salir"
-    echo "-----------------------------------------"
-    read -rp " Opción: " opcion
+    if [ -z "$users_list" ]; then
+        echo -e "${C_DIM}  Sin usuarios registrados.${C_RESET}"
+    else
+        for u in $users_list; do
+            if id -nG "$u" | grep -qw "reprobados"; then
+                gr="\033[0;31mreprobados\033[0m"
+            elif id -nG "$u" | grep -qw "recursadores"; then
+                gr="\033[0;33mrecursadores\033[0m"
+            else
+                gr="${C_DIM}sin grupo${C_RESET}"
+            fi
+            printf "%-20s | $gr\n" "$u"
+        done
+    fi
+    echo -e "${C_DIM}----------------------------------------${C_RESET}"
+}
 
-    case "$opcion" in
-        1) alta_usuario      ;;
-        2) alta_masiva       ;;
-        3) cambiar_grupo     ;;
-        4) eliminar_usuario  ;;
-        5) listar_usuarios   ;;
-        6)
-            systemctl restart vsftpd
-            registrar "Servicio vsftpd reiniciado manualmente." "OK"
-            ;;
-        7)
-            registrar "Sesión terminada." "INFO"
-            exit 0
-            ;;
-        *)
-            echo "Opción no reconocida. Intenta de nuevo."
-            ;;
-    esac
-done
+menu_principal() {
+    if ! systemctl is-active --quiet vsftpd; then
+        preparar_entorno_ftp
+    fi
+
+    while true; do
+        clear
+        echo -e "\n${C_TITULO}  ADMINISTRADOR FTP  //  Fedora + VSFTPD${C_RESET}"
+        echo -e "${C_DIM}  ----------------------------------------${C_RESET}"
+        echo -e "  ${C_INFO}1.${C_RESET}  Instalar y configurar servidor"
+        echo -e "  ${C_INFO}2.${C_RESET}  Agregar usuarios"
+        echo -e "  ${C_INFO}3.${C_RESET}  Reasignar grupo"
+        echo -e "  ${C_INFO}4.${C_RESET}  Borrar usuario"
+        echo -e "  ${C_INFO}5.${C_RESET}  Listar usuarios"
+        echo -e "  ${C_ERROR}0.${C_RESET}  Salir"
+        echo -e "${C_DIM}  ----------------------------------------${C_RESET}"
+        read -p "  Opcion: " opt
+
+        case $opt in
+            1) preparar_entorno_ftp ;;
+            2)
+                echo -e "\n${C_TITULO}  -- Agregar usuarios --${C_RESET}"
+                read -p "  Cuantos usuarios?: " total
+                if [[ ! "$total" =~ ^[0-9]+$ ]] || [[ "$total" -le 0 ]]; then
+                    echo -e "${C_ERROR}  ERR  Numero invalido.${C_RESET}"
+                else
+                    for (( i=1; i<=total; i++ )); do
+                        echo ""
+                        read -p "  Nombre ($i/$total): " u_name
+                        while true; do
+                            read -s -p "  Contrasena: " u_pass; echo
+                            if [ -n "$u_pass" ]; then break; fi
+                            echo -e "${C_ERROR}  ERR  La contrasena no puede estar vacia.${C_RESET}"
+                        done
+                        read -p "  Grupo (1: reprobados | 2: recursadores): " u_group
+                        [[ "$u_group" == "1" ]] && grp="reprobados" || grp="recursadores"
+                        dar_alta_usuario "$u_name" "$u_pass" "$grp"
+                    done
+                fi
+                ;;
+            3)
+                echo -e "\n${C_TITULO}  -- Reasignar grupo --${C_RESET}"
+                read -p "  Usuario: " u_name
+                read -p "  Nuevo grupo (1: reprobados | 2: recursadores): " u_group
+                [[ "$u_group" == "1" ]] && grp="reprobados" || grp="recursadores"
+                mover_usuario_grupo "$u_name" "$grp"
+                ;;
+            4)
+                echo -e "\n${C_TITULO}  -- Borrar usuario --${C_RESET}"
+                read -p "  Usuario a eliminar: " u_name
+                read -p "  Confirmar borrado de '$u_name' (s/n): " confirmar
+                if [[ "$confirmar" == "s" || "$confirmar" == "S" ]]; then
+                    eliminar_usuario "$u_name"
+                fi
+                ;;
+            5) mostrar_resumen_usuarios ;;
+            0) exit 0 ;;
+            *) echo -e "${C_ERROR}  ERR  Opcion no reconocida.${C_RESET}" ;;
+        esac
+        echo ""
+        read -p "  Presiona ENTER para volver al menu..."
+    done
+}
+
+menu_principal
