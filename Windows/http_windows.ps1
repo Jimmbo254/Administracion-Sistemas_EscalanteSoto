@@ -1,6 +1,6 @@
 # http_windows.ps1 — Servidor Web Windows Server (Main)
 
-. ".\http_functions.ps1"
+. "$PSScriptRoot\http_functions.ps1"
 
 function Validar-Admin {
     $current   = [Security.Principal.WindowsIdentity]::GetCurrent()
