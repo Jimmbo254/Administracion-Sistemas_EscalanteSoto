@@ -78,8 +78,7 @@ function Obtener-Versiones {
     }
 
     Write-Host ""
-    Write-Host "  Versiones disponibles para $paquete:" -ForegroundColor Cyan
-    $i = 1
+    Write-Host "  Versiones disponibles para ${paquete}:" -ForegroundColor Cyan    $i = 1
     $total = $versiones.Count
     foreach ($v in $versiones) {
         $etiqueta = ""
