@@ -76,7 +76,7 @@ function Crear-Index {
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Nginx/title>
+  <title>Nginx</title>
 </head>
 <body>
   <h1>Nginx</h1>
