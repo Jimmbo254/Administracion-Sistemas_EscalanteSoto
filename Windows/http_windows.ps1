@@ -1,3 +1,9 @@
+# =============================================================================
+# aprovisionamiento_http.ps1 - Aprovisionamiento HTTP en Windows Server 2022
+# Uso: Ejecutar como Administrador en PowerShell
+# Servidores: IIS, Apache (ZIP), Nginx (ZIP), Tomcat (ZIP)
+# IP VM: 192.168.56.102
+# =============================================================================
 
 $VM_IP    = "192.168.56.102"
 $ZIP_BASE = "C:\"
@@ -76,13 +82,15 @@ function Crear-Index {
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>$Servicio</title>
+  <title>$Servicio - Puerto $Puerto</title>
 </head>
 <body>
-  <h2>$Servicio</h2>
-  <p>Version: $Version</p>
-  <p>IP: $VM_IP</p>
-  <p>Puerto: $Puerto</p>
+  <h1>Servidor Activo</h1>
+  <p><strong>Servidor:</strong> $Servicio</p>
+  <p><strong>Version:</strong> $Version</p>
+  <p><strong>Puerto:</strong> $Puerto</p>
+  <p><strong>IP:</strong> $VM_IP</p>
+  <p>URL: http://${VM_IP}:${Puerto}</p>
 </body>
 </html>
 "@
