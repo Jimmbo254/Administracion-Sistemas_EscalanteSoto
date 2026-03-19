@@ -80,17 +80,12 @@ function Crear-Index {
     $html = @"
 <!DOCTYPE html>
 <html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <title>$Servicio - Puerto $Puerto</title>
-</head>
+<head><meta charset="UTF-8"><title>$Servicio</title></head>
 <body>
-  <h1>Servidor Activo</h1>
-  <p><strong>Servidor:</strong> $Servicio</p>
-  <p><strong>Version:</strong> $Version</p>
-  <p><strong>Puerto:</strong> $Puerto</p>
-  <p><strong>IP:</strong> $VM_IP</p>
-  <p>URL: http://${VM_IP}:${Puerto}</p>
+  <h2>$Servicio</h2>
+  <p>Version: $Version</p>
+  <p>IP: $VM_IP</p>
+  <p>Puerto: $Puerto</p>
 </body>
 </html>
 "@
@@ -881,22 +876,19 @@ function Limpiar-Entorno-Win {
 # =============================================================================
 
 while ($true) {
+    Clear-Host
     Write-Host ""
-    Write-Host "  +=============================================+" -ForegroundColor Magenta
-    Write-Host "  |    Aprovisionamiento HTTP Multi-Servidor    |" -ForegroundColor Magenta
-    Write-Host "  |         Windows Server 2022                 |" -ForegroundColor Magenta
-    Write-Host "  |         VM: $VM_IP                          |" -ForegroundColor Magenta
-    Write-Host "  +=============================================+" -ForegroundColor Magenta
-    Write-Host "  |  1) IIS     (Nativo de Windows Server)      |" -ForegroundColor White
-    Write-Host "  |  2) Apache  (ZIP desde C:\)                 |" -ForegroundColor White
-    Write-Host "  |  3) Nginx   (ZIP desde C:\)                 |" -ForegroundColor White
-    Write-Host "  |  4) Tomcat  (ZIP desde C:\)                 |" -ForegroundColor White
-    Write-Host "  |  5) Levantar / Reiniciar servicio           |" -ForegroundColor White
-    Write-Host "  |  6) Desinstalar servidor                    |" -ForegroundColor White
-    Write-Host "  |  7) Verificar servicio                      |" -ForegroundColor White
-    Write-Host "  |  8) Limpiar entorno completo                |" -ForegroundColor White
-    Write-Host "  |  9) Salir                                   |" -ForegroundColor White
-    Write-Host "  +=============================================+" -ForegroundColor Magenta
+    Write-Host "========= MENÚ HTTP =========" -ForegroundColor Cyan
+    Write-Host "1) IIS     (Nativo de Windows Server)"
+    Write-Host "2) Apache  (ZIP desde C:\)"
+    Write-Host "3) Nginx   (ZIP desde C:\)"
+    Write-Host "4) Tomcat  (ZIP desde C:\)"
+    Write-Host "5) Levantar / Reiniciar servicio"
+    Write-Host "6) Desinstalar servidor"
+    Write-Host "7) Verificar servicio"
+    Write-Host "8) Limpiar entorno completo"
+    Write-Host "9) Salir"
+    Write-Host "============================="
     Write-Host ""
 
     $opcion = Read-Host "  Selecciona una opcion (1-9)"
