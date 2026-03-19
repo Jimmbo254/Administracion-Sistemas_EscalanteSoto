@@ -9,16 +9,15 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 }
 
 do {
-    Write-Host "`n========= MENU HTTP =========" -ForegroundColor Cyan
-    Write-Host "1) Instalar IIS "
-    Write-Host "2) Instalar Apache "
-    Write-Host "3) Instalar Nginx "
+    Write-Host "`n======= MENU WINDOWS =======" -ForegroundColor Green
+    Write-Host "1) Instalar IIS"
+    Write-Host "2) Instalar Apache"
+    Write-Host "3) Instalar Nginx"
     Write-Host "4) Desinstalar IIS"
     Write-Host "5) Desinstalar Apache"
     Write-Host "6) Desinstalar Nginx"
     Write-Host "0) Salir"
-    Write-Host "============================="
-
+    
     $opcion = Read-Host "Elige una opcion"
 
     switch ($opcion) {
@@ -28,7 +27,7 @@ do {
         "4" { Desinstalar-IIS }
         "5" { Desinstalar-Opcional -Servicio "apache" }
         "6" { Desinstalar-Opcional -Servicio "nginx" }
-        "0" { Write-Host "Saliendo..."; break }
-        default { Write-Host "[Error] Opcion no valida." -ForegroundColor Red }
+        "0" { Write-Host "Saliendo del script..."; break }
+        default { Write-Host "[X] Opcion no valida." -ForegroundColor Red }
     }
 } while ($opcion -ne "0")
