@@ -76,13 +76,13 @@ function Crear-Index {
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Nginx</title>
+  <title>$Servicio</title>
 </head>
 <body>
-  <h1>Nginx</h1>
-  <p><strong>Version:</strong> $Version</p>
-    <p><strong>IP:</strong> $VM_IP</p>
-  <p><strong>Puerto:</strong> $Puerto</p>
+  <h2>$Servicio</h2>
+  <p>Version: $Version</p>
+  <p>IP: $VM_IP</p>
+  <p>Puerto: $Puerto</p>
 </body>
 </html>
 "@
