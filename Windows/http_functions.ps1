@@ -90,7 +90,18 @@ while (`$listener.IsListening) {
 
 function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
-    Stop-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "" }
+
+    # Matar todos los procesos que escuchan en puerto 80
+    $pids = netstat -ano | Select-String ":80 " | ForEach-Object {
+        ($_ -split '\s+')[-1]
+    } | Sort-Object -Unique
+
+    foreach ($p in $pids) {
+        if ($p -match '^\d+$' -and $p -ne "0") {
+            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     Remove-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-80" -ErrorAction SilentlyContinue
     Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
 }
