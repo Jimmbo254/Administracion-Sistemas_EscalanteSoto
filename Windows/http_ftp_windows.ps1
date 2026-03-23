@@ -1,8 +1,3 @@
-# ==============================================================================
-# MODULO HTTP/FTP COMBINADO - WINDOWS (P07)
-# Administracion de Sistemas — Escalante Soto Jaime Omar
-# ==============================================================================
-
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,
