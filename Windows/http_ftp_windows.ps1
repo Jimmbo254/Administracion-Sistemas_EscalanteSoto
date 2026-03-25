@@ -1,3 +1,7 @@
+# ==============================================================================
+# MODULO HTTP/FTP COMBINADO - WINDOWS (P07)
+# ==============================================================================
+
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,
@@ -8,21 +12,7 @@ $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79
 # ================================================================
 # LIMPIEZA Y PAGINA
 # ================================================================
-function Garantizar-Chocolatey {
-    $chocoPath = "C:\ProgramData\chocolatey\bin\choco.exe"
-    if (!(Test-Path $chocoPath)) {
-        Write-Host "[!] Chocolatey no detectado. Iniciando instalacion..." -ForegroundColor Yellow
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        # El comando iex instala choco, pero NO guardamos su salida en una variable
-        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        
-        # Forzamos la actualización de la variable de entorno en la sesión actual
-        $env:Path += ";C:\ProgramData\chocolatey\bin"
-    }
-    # Siempre devolvemos la ruta física del ejecutable
-    return "C:\ProgramData\chocolatey\bin\choco.exe"
-}
+
 function Limpiar-Entorno {
     param($Puerto)
     Write-Host "[*] Limpiando servicios en puerto $Puerto..." -ForegroundColor Gray
@@ -36,58 +26,25 @@ function Limpiar-Entorno {
 
 function Crear-Pagina {
     param($servicio, $puerto)
-    
-    # 1. Definir rutas según el servicio
     $paths = @{
         "nginx"  = "C:\tools\nginx-1.29.6\html\index.html"
-        "apache" = "C:\Users\vboxuser\AppData\Roaming\Apache24\htdocs\index.html"
+        "apache" = "C:\Users\Administrator\AppData\Roaming\Apache24\htdocs\index.html"
         "iis"    = "C:\inetpub\wwwroot\index.html"
     }
-    
     $path = $paths[$servicio]
     if (!$path) { return }
-    
-    # 2. Configurar variables visuales según el servidor
-    $color = "#009688" # Verde para Nginx por defecto
-    $icon  = "●"
-    $msg   = "Servicio Activo"
-    
-    if ($servicio -eq "apache") { $color = "#D32F2F" } # Rojo para Apache
-    if ($servicio -eq "iis")    { $color = "#0288D1" } # Azul para IIS
-
-    $servidorNombre = $servicio.ToUpper()
-
-    # 3. El HTML que quieres (usando las variables anteriores)
-    $html = @"
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<title>$servidorNombre</title>
-<style>
-  body { margin: 0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; color: #111; }
-  .wrap { text-align: center; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: $color; display: inline-block; margin-bottom: 2rem; }
-  h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 .4rem; }
-  .badge { display: inline-block; margin: 1.2rem 0; padding: .3rem .9rem; border: 1.5px solid $color; color: $color; font-size: .85rem; border-radius: 99px; }
-  .meta { font-size: .85rem; color: #777; margin-top: .5rem; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="dot"></div>
-  <h1>$servidorNombre</h1>
-  <div class="badge">$icon $msg</div>
-  <div class="meta">www.reprobados.com &nbsp;·&nbsp; :$puerto</div>
-</div>
-</body>
-</html>
-"@
-
-    # 4. Guardar el archivo en la ruta correspondiente
     $dir = Split-Path $path
     if (!(Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
-    Set-Content $path $html -Encoding UTF8
+    $html  = "<html>"
+    $html += "<head><title>$($servicio.ToUpper()) - Puerto $puerto</title></head>"
+    $html += "<body>"
+    $html += "<h1>$($servicio.ToUpper()) Activo</h1>"
+    $html += "<p>Servicio: $($servicio.ToUpper())</p>"
+    $html += "<p>Puerto: $puerto</p>"
+
+    $html += "</body>"
+    $html += "</html>"
+    Set-Content $path $html -Encoding ASCII
 }
 
 # ================================================================
@@ -146,25 +103,10 @@ function Obtener-CertObj {
 function Aplicar-Despliegue {
     param($Servicio)
 
-    # NUEVO: Pedir puerto específico para este despliegue
-    Write-Host ""
-    $P_Ingresado = Read-Host "Ingrese el puerto para $Servicio (ej. 8081, 8443, 9090)"
-    
-    # Validar que sea un número
-    if ($P_Ingresado -match '^\d+$') {
-        $P = [int]$P_Ingresado
-    } else {
-        Write-Host "[!] Puerto invalido, usando puerto configurado por defecto: $global:PUERTO_ACTUAL" -ForegroundColor Yellow
-        $P = [int]$global:PUERTO_ACTUAL
+    if (-not ($global:PUERTO_ACTUAL -match '^\d+$')) {
+        $global:PUERTO_ACTUAL = Read-Host "Puerto a usar"
     }
-
-    # Verificar si el puerto está bloqueado por navegadores
-    if ($P -in $PUERTOS_BLOQUEADOS) {
-        Write-Host "[!] Advertencia: El puerto $P esta en la lista de bloqueados por navegadores." -ForegroundColor Yellow
-        $confirma = Read-Host "Desea continuar de todos modos? [S/N]"
-        if ($confirma -notmatch '^[Ss]$') { return }
-    }
-
+    $P    = [int]$global:PUERTO_ACTUAL
     $cert = Generar-Certificado-SSL
 
     # ---- NUEVO: Pregunta de SSL ----
@@ -178,7 +120,7 @@ function Aplicar-Despliegue {
     switch ($Servicio) {
 
         "nginx" {
-            $nginxExeItem = Get-ChildItem "C:\tools" -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            $nginxExeItem = Get-ChildItem "C:\tools\nginx" -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
             if (!$nginxExeItem) { Write-Host "[!] nginx.exe no encontrado en C:\tools\nginx" -ForegroundColor Red; Pause; return }
             $nginxDir = $nginxExeItem.DirectoryName
             $conf     = "$nginxDir\conf\nginx.conf"
@@ -232,13 +174,15 @@ http {
             Start-Sleep -Seconds 3
         }
 
-       "apache" {
-            # 1. Localizar ruta de Apache
+        "apache" {
             $rutaApache = $null
             $svcWmi = Get-CimInstance Win32_Service | Where-Object { $_.Name -like "Apache*" } | Select-Object -First 1
             if ($svcWmi) {
-                if ($svcWmi.PathName -match '"([^"]+bin[^"]+httpd\.exe)"') { $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent }
-                elseif ($svcWmi.PathName -match '([A-Za-z]:[^ ]+httpd\.exe)') { $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent }
+                if ($svcWmi.PathName -match '"([^"]+bin[^"]+httpd\.exe)"') {
+                    $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent
+                } elseif ($svcWmi.PathName -match '([A-Za-z]:[^ ]+httpd\.exe)') {
+                    $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent
+                }
             }
             if (!$rutaApache) {
                 foreach ($c in @("C:\Apache24","$env:APPDATA\Apache24")) {
@@ -246,41 +190,44 @@ http {
                 }
             }
             if (!$rutaApache) { Write-Host "[!] Apache no encontrado." -ForegroundColor Red; Pause; return }
-            
+            Write-Host "[*] Apache en: $rutaApache" -ForegroundColor Cyan
+
             $conf    = "$rutaApache\conf\httpd.conf"
             $webRoot = "$rutaApache\htdocs"
             $certDir = "C:/ssl/reprobados"
-            $webDir  = $webRoot -replace '\\','/'
 
-            # 2. Leer y Limpiar configuración previa
             $lineas = Get-Content $conf
-            # Quitamos VirtualHosts viejos para no amontonar
-            for ($i = 0; $i -lt $lineas.Count; $i++) {
+            for ($i = 200; $i -lt $lineas.Count; $i++) {
                 if ($lineas[$i] -match '^<VirtualHost') { $lineas = $lineas[0..($i-1)]; break }
             }
 
-            # 3. Procesar líneas básicas y activar módulos necesarios
-            $lineas = $lineas | Where-Object { $_ -notmatch '^Listen ' } # Borrar Listen viejos
+            $primeraListen = $true
+            $tieneListenLigne = $false
             $lineas = $lineas | ForEach-Object {
-                if ($_ -match '^#?ServerName ') { "ServerName www.reprobados.com:$P" }
+                if ($_ -match '^Listen ') {
+                    if ($primeraListen) { $primeraListen = $false; $tieneListenLigne = $true; "Listen $P" }
+                }
+                elseif ($_ -match '^#Listen ')              { $tieneListenLigne = $true; "Listen $P" }
+                elseif ($_ -match '^#?ServerName ')          { "ServerName www.reprobados.com:$P" }
                 elseif ($_ -match '^#LoadModule ssl_module') { "LoadModule ssl_module modules/mod_ssl.so" }
                 elseif ($_ -match '^#LoadModule socache_shmcb_module') { "LoadModule socache_shmcb_module modules/mod_socache_shmcb.so" }
-                # --- ESTA LINEA ARREGLA TU ERROR 'Invalid command Header' ---
-                elseif ($_ -match '^#LoadModule headers_module') { "LoadModule headers_module modules/mod_headers.so" }
                 else { $_ }
             }
+            if (!$tieneListenLigne) { $lineas = @("Listen $P") + $lineas }
 
-            # 4. Definir nuevos puertos de escucha
-            if ($usarSSL) { $lineas = @("Listen 80", "Listen $P") + $lineas }
-            else { $lineas = @("Listen $P") + $lineas }
+            $webDir = $webRoot -replace '\\','/'
 
-            # 5. Agregar el VirtualHost con el puerto dinámico
             if ($usarSSL) {
+                # ---- NUEVO: VirtualHost HTTP en 80 que redirige a HTTPS ----
                 $vhost = @"
+
+# Escuchar tambien en 80 para la redireccion
+Listen 80
 
 <VirtualHost *:80>
     ServerName www.reprobados.com
     Redirect permanent / https://www.reprobados.com:$P/
+    Header always set Strict-Transport-Security "max-age=31536000"
 </VirtualHost>
 
 <VirtualHost *:$P>
@@ -299,6 +246,7 @@ http {
 "@
             } else {
                 $vhost = @"
+
 <VirtualHost *:$P>
     ServerName www.reprobados.com
     DocumentRoot "$webDir"
@@ -313,54 +261,71 @@ http {
             $lineas += ($vhost -split "`n")
             Set-Content $conf $lineas -Encoding ASCII
 
-            # 6. Validar y Reiniciar
             $test = & "$rutaApache\bin\httpd.exe" -t 2>&1
-            if ($test -match "Syntax OK") {
-                Write-Host "[OK] Sintaxis Apache correcta." -ForegroundColor Green
-                Crear-Pagina "apache" $P
-                Restart-Service Apache* -Force -ErrorAction SilentlyContinue
-                Start-Sleep -Seconds 3
+            $ok   = $test | Where-Object { $_ -like "*Syntax OK*" }
+            Write-Host "[*] Sintaxis: $(if ($ok) { 'OK' } else { 'ERROR' })" -ForegroundColor $(if ($ok) { 'Green' } else { 'Red' })
+            if (!$ok) { $test | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }; Pause; return }
+
+            Crear-Pagina "apache" $P
+            Get-Process httpd -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 1
+
+            $svc = Get-Service -Name "Apache*" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($svc) {
+                try { Restart-Service $svc.Name -Force -ErrorAction Stop }
+                catch { Start-Process "$rutaApache\bin\httpd.exe" -WorkingDirectory "$rutaApache" -WindowStyle Hidden }
             } else {
-                Write-Host "[!] Error en config de Apache:" -ForegroundColor Red
-                $test | Out-String | Write-Host -ForegroundColor Yellow
-                Pause; return
+                Start-Process "$rutaApache\bin\httpd.exe" -WorkingDirectory "$rutaApache" -WindowStyle Hidden
+            }
+            Start-Sleep -Seconds 4
+            if (!(Get-NetTCPConnection -LocalPort $P -State Listen -ErrorAction SilentlyContinue)) {
+                & "$rutaApache\bin\httpd.exe" -k start 2>$null
+                Start-Sleep -Seconds 3
             }
         }
 
-      "iis" {
-    Write-Host "[*] Configurando IIS en puerto $P..." -ForegroundColor Cyan
-    Import-Module WebAdministration
-    
-    # 1. Limpieza total (Matar procesos que estorben)
-    Get-Website | Stop-Website -ErrorAction SilentlyContinue
-    Remove-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
-    Remove-Website -Name "SitioP7" -ErrorAction SilentlyContinue
-
-    # 2. Crear el sitio
-    $webRoot = "C:\inetpub\wwwroot"
-    New-Website -Name "SitioP7" -Port $P -PhysicalPath $webRoot -Force
-
-   if ($usarSSL) {
+        "iis" {
             $certObj = Obtener-CertObj
-            if ($certObj) {
-                # --- AÑADE ESTA LÍNEA AQUÍ PARA LIMPIAR ANTES DE CREAR ---
-                Get-ChildItem -Path "IIS:\SslBindings" | Where-Object { $_.Port -eq $P } | Remove-Item -Force -ErrorAction SilentlyContinue
-                
-                New-WebBinding -Name "SitioP7" -IPAddress "*" -Port $P -Protocol "https"
-                $certObj | New-Item -Path "IIS:\SslBindings\*!$P" -Force
-                Write-Host "[OK] SSL vinculado al puerto $P" -ForegroundColor Green
-            }
+            $webRoot = "C:\inetpub\wwwroot"
+            if (!(Test-Path $webRoot)) { New-Item $webRoot -ItemType Directory -Force | Out-Null }
+            Crear-Pagina "iis" $P
+            try {
+                Remove-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+                New-Website -Name "Default Web Site" -Port $P -PhysicalPath $webRoot -Force | Out-Null
+
+                if ($usarSSL) {
+                    # Quitar binding HTTP y dejar solo HTTPS
+                    Get-WebBinding -Name "Default Web Site" -Protocol "http" | Remove-WebBinding -ErrorAction SilentlyContinue
+                    New-WebBinding -Name "Default Web Site" -Protocol "https" -Port $P -IPAddress "*"
+                    $sslPath = "IIS:\SslBindings\*!$P"
+                    if (!(Test-Path $sslPath)) {
+                        Get-Item "Cert:\LocalMachine\My\$($certObj.Thumbprint)" | New-Item -Path $sslPath -Force | Out-Null
+                    }
+
+                    # ---- NUEVO: Agregar binding HTTP en 80 con redireccion a HTTPS ----
+                    New-WebBinding -Name "Default Web Site" -Protocol "http" -Port 80 -IPAddress "*" -ErrorAction SilentlyContinue
+
+                    # Activar HTTP Redirect de IIS hacia HTTPS
+                    Set-WebConfigurationProperty -Filter "system.webServer/httpRedirect" `
+                        -Name "enabled" -Value $true `
+                        -PSPath "IIS:\Sites\Default Web Site" -ErrorAction SilentlyContinue
+                    Set-WebConfigurationProperty -Filter "system.webServer/httpRedirect" `
+                        -Name "destination" -Value "https://www.reprobados.com:$P" `
+                        -PSPath "IIS:\Sites\Default Web Site" -ErrorAction SilentlyContinue
+                    Set-WebConfigurationProperty -Filter "system.webServer/httpRedirect" `
+                        -Name "httpResponseStatus" -Value "Permanent" `
+                        -PSPath "IIS:\Sites\Default Web Site" -ErrorAction SilentlyContinue
+
+                    Write-Host "[OK] Redireccion HTTP->HTTPS configurada en IIS." -ForegroundColor Green
+                } else {
+                    New-WebBinding -Name "Default Web Site" -Protocol "http" -Port $P -IPAddress "*" -ErrorAction SilentlyContinue
+                }
+            } catch { Write-Host "[!] $($_.Exception.Message)" -ForegroundColor Red }
+            Start-Service W3SVC -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
         }
-
-    # 4. Abrir el Firewall para el puerto 12000 (Si no lo abres, no jala)
-    New-NetFirewallRule -DisplayName "IIS_Port_$P" -Direction Inbound -LocalPort $P -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
-
-    # 5. Reiniciar y ESPERAR
-    Restart-Service W3SVC -Force
-    Write-Host "[*] Esperando a que IIS despierte..."
-    Start-Sleep -Seconds 5 # Dale tiempo de levantar el puerto
     }
-}
+
     Start-Sleep -Seconds 2
     if (Get-NetTCPConnection -LocalPort $P -State Listen -ErrorAction SilentlyContinue) {
         Write-Host "[OK] $Servicio ONLINE en puerto $P" -ForegroundColor Green
@@ -450,7 +415,7 @@ function Instalar-Servicio {
             if ($dep -match '^[Ss]$') { Aplicar-Despliegue "iis" }
             return
         }
-        $chocoExe = Garantizar-Chocolatey
+        $chocoExe = "C:\ProgramData\chocolatey\bin\choco.exe"
         Limpiar-Entorno 80
         Write-Host "[*] Consultando versiones para $paquete..." -ForegroundColor Cyan
         $raw  = & $chocoExe search $paquete --exact --limit-output 2>$null
@@ -758,5 +723,3 @@ function Menu-FTP-HTTP {
         }
     }
 }
-
-Menu-FTP-HTTP
