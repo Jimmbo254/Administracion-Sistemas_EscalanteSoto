@@ -179,10 +179,11 @@ Start-Sleep -Seconds 5
 New-GPLink -Name $targetGPO -Target $baseLdap -ErrorAction SilentlyContinue | Out-Null
 $cadenaLdap = "LDAP://CN={$($gpoNueva.Id)},CN=Policies,CN=System,$baseLdap"
 
-# Valores exactos extraidos de tu cliente Windows 10 para Notepad.exe (Authenticode Hash)
-$fileHash = "0x0C386FA6ABFDEFFBBEFF5BCE97D461340A23D1981458607BD9E5EEFF4066789A"
-$fileLen  = 201216
-Write-Host ">> Usando hash y length estaticos verificados para Notepad..." -ForegroundColor Green
+$fileHash  = "0x0C386FA6ABFDEFFBBEFF5BCE97D461340A23D1981458607BD9E5EEFF4066789A"
+$fileLen   = 201216
+$fileHash2 = "0xA3D73A766B718A3D19322043E6418EB9657F752543BDAFA9FD8BCBFA3E874625"
+$fileLen2  = 165888
+Write-Host ">> Usando ambos hashes verificados para Notepad (System32 + SysWOW64)..." -ForegroundColor Green
 
 $sidNoCuates = (Get-ADGroup "NoCuates").SID.Value
 
@@ -198,10 +199,17 @@ $xmlTodo = @"
     <FilePathRule Id="fd686d83-a829-4351-8ff4-27c7de5755d2" Name="Salvavidas Administradores" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow">
       <Conditions><FilePathCondition Path="*" /></Conditions>
     </FilePathRule>
-    <FileHashRule Id="$([guid]::NewGuid().ToString())" Name="Bloquear Notepad NoCuates" Description="" UserOrGroupSid="$sidNoCuates" Action="Deny">
+    <FileHashRule Id="$([guid]::NewGuid().ToString())" Name="Bloquear Notepad System32 NoCuates" Description="" UserOrGroupSid="$sidNoCuates" Action="Deny">
       <Conditions>
         <FileHashCondition>
           <FileHash Type="SHA256" Data="$fileHash" SourceFileName="notepad.exe" SourceFileLength="$fileLen" />
+        </FileHashCondition>
+      </Conditions>
+    </FileHashRule>
+    <FileHashRule Id="$([guid]::NewGuid().ToString())" Name="Bloquear Notepad SysWOW64 NoCuates" Description="" UserOrGroupSid="$sidNoCuates" Action="Deny">
+      <Conditions>
+        <FileHashCondition>
+          <FileHash Type="SHA256" Data="$fileHash2" SourceFileName="notepad.exe" SourceFileLength="$fileLen2" />
         </FileHashCondition>
       </Conditions>
     </FileHashRule>
@@ -300,6 +308,6 @@ try { Set-Service -Name AppIDSvc -StartupType Automatic -ErrorAction SilentlyCon
 Start-Service -Name AppIDSvc -ErrorAction SilentlyContinue
 gpupdate /force | Out-Null
 
-Write-Host ">> AppLocker configurado con reglas Hash para Notepad." -ForegroundColor Green
+Write-Host ">> AppLocker configurado con ambas reglas Hash para Notepad." -ForegroundColor Green
 Write-Host ">>> SCRIPT FINALIZADO EXITOSAMENTE <<<" -ForegroundColor Cyan
 Write-Host ">> Para unir tu Windows 10 al dominio usa: Add-Computer -DomainName `"reprobados.com`" -Credential (Get-Credential) -Restart -Force" -ForegroundColor Yellow
